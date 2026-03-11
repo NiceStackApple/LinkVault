@@ -213,7 +213,7 @@ const EditableFolderName = ({ name, onSave, isEditing, setIsEditing }: { name: s
             setEditName(name);
           }
         }}
-        className="w-full bg-white/50 border border-indigo-300 rounded px-1 text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+        className="w-full bg-white/50 border border-slate-300 rounded px-1 text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500/50"
         onClick={e => e.stopPropagation()}
       />
     );
@@ -258,7 +258,7 @@ const EditableLinkTitle = ({ title, onSave, isEditing, setIsEditing }: { title: 
             setEditTitle(title);
           }
         }}
-        className="w-full bg-white/50 border border-indigo-300 rounded px-1 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+        className="w-full bg-white/50 border border-slate-300 rounded px-1 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500/50"
         onClick={e => e.stopPropagation()}
       />
     );
@@ -351,7 +351,7 @@ const LinkCard: React.FC<{
 
   return (
     <div 
-      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl overflow-visible flex flex-col transition-all relative cursor-pointer ${isSelected ? 'border-indigo-500 ring-1 ring-indigo-500 bg-indigo-50/50' : 'border-white/40'}`}
+      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl overflow-visible flex flex-col transition-all relative cursor-pointer ${isSelected ? 'border-slate-800 ring-1 ring-slate-800 bg-slate-100/50' : 'border-white/40'}`}
       onClick={onClick}
       onDoubleClick={handleDoubleClick}
     >
@@ -469,7 +469,7 @@ const LinkCard: React.FC<{
             href={link.url} 
             target="_blank" 
             rel="noopener noreferrer"
-            className="text-xs text-slate-500 truncate hover:text-indigo-500 transition-colors mb-4 block"
+            className="text-xs text-slate-500 truncate hover:text-slate-800 transition-colors mb-4 block"
             onClick={e => { if (onDoubleClick) e.preventDefault(); }}
           >
             {getDomain(link.url)}
@@ -505,7 +505,7 @@ const LinkCard: React.FC<{
                 href={link.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
+                className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-slate-800 bg-slate-100 hover:bg-slate-200"
                 onClick={e => e.stopPropagation()}
               >
                 <ExternalLink size={12} />
@@ -543,7 +543,7 @@ const FolderCard: React.FC<{
 
   return (
     <div 
-      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl p-4 flex items-center cursor-pointer transition-all hover:border-indigo-100 relative overflow-visible ${isSelected ? 'border-indigo-500 ring-1 ring-indigo-500 bg-indigo-50/50' : 'border-white/40'}`}
+      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl p-4 flex items-center cursor-pointer transition-all hover:border-slate-300 relative overflow-visible ${isSelected ? 'border-slate-800 ring-1 ring-slate-800 bg-slate-100/50' : 'border-white/40'}`}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       title="Double-click to open"
@@ -636,7 +636,7 @@ const SidebarFolder: React.FC<{ folder: Folder, currentFolderId: string, onSelec
   return (
     <div>
       <div 
-        className={`flex items-center py-1.5 px-2 rounded-md cursor-pointer transition-colors ${isSelected ? 'bg-indigo-100/60 text-indigo-800 font-medium' : 'hover:bg-slate-100/80 text-slate-700'}`}
+        className={`flex items-center py-1.5 px-2 rounded-md cursor-pointer transition-colors ${isSelected ? 'bg-slate-200/60 text-slate-900 font-medium' : 'hover:bg-slate-100/80 text-slate-700'}`}
         style={{ paddingLeft: `${level * 12 + 8}px` }}
         onClick={() => onSelect(folder.id)}
       >
@@ -650,7 +650,7 @@ const SidebarFolder: React.FC<{ folder: Folder, currentFolderId: string, onSelec
             <span className="w-[14px] inline-block" />
           )}
         </button>
-        <FolderIcon size={16} className={`mr-2 ${isSelected ? 'text-indigo-500' : 'text-slate-400'}`} />
+        <FolderIcon size={16} className={`mr-2 ${isSelected ? 'text-slate-800' : 'text-slate-400'}`} />
         <span className="text-sm truncate">{folder.name}</span>
       </div>
       {isOpen && folder.folders.map(sub => (
@@ -977,7 +977,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden selection:bg-indigo-100 selection:text-indigo-900">
+    <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden selection:bg-slate-200 selection:text-slate-900">
       {/* Mobile Sidebar Overlay */}
       {isSidebarOpen && (
         <div 
@@ -994,10 +994,8 @@ export default function App() {
       `}>
         <div className="p-5 border-b border-slate-200/60 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-sm shadow-indigo-200">
-              <LinkIcon size={18} className="text-white" />
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-800">LinkVault<span className="text-indigo-600">Pro</span></h1>
+            <img src="/favicon.png" alt="LinkVaultPro Logo" className="w-8 h-8 rounded-lg" referrerPolicy="no-referrer" />
+            <h1 className="text-xl font-bold tracking-tight text-black">LinkVault<span className="font-normal">Pro</span></h1>
           </div>
           <button className="lg:hidden text-slate-500 hover:text-slate-800" onClick={() => setIsSidebarOpen(false)}>
             <X size={20} />
@@ -1016,14 +1014,14 @@ export default function App() {
           <div className="flex space-x-2">
             <button 
               onClick={handleExport}
-              className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors shadow-sm"
+              className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
             >
               <Download size={16} />
               <span>Export</span>
             </button>
             <button 
               onClick={() => fileInputRef.current?.click()}
-              className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors shadow-sm"
+              className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
             >
               <Upload size={16} />
               <span>Import</span>
@@ -1044,19 +1042,19 @@ export default function App() {
         {/* Header Area */}
         <div className="sticky top-0 z-10 flex flex-col shadow-sm">
           {selectedItemIds.length > 0 ? (
-            <header className="h-16 bg-indigo-50/90 backdrop-blur-md border-b border-indigo-100 flex items-center px-4 sm:px-8 justify-between gap-4">
+            <header className="h-16 bg-slate-100/90 backdrop-blur-md border-b border-slate-200 flex items-center px-4 sm:px-8 justify-between gap-4">
               <div className="flex items-center">
                 <button onClick={() => { setSelectedItemIds([]); setExplicitBulkMode(false); }} className="p-2 text-slate-500 hover:bg-slate-200 rounded-full mr-2">
                   <X size={20} />
                 </button>
-                <span className="font-medium text-indigo-900">{selectedItemIds.length} selected</span>
+                <span className="font-medium text-slate-900">{selectedItemIds.length} selected</span>
               </div>
               
               <div className="flex items-center space-x-2">
                 {!isBulkMode ? (
                   <button 
                     onClick={() => setExplicitBulkMode(true)}
-                    className="px-4 py-1.5 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded-lg text-sm font-medium transition-colors"
+                    className="px-4 py-1.5 bg-slate-200 text-slate-800 hover:bg-slate-300 rounded-lg text-sm font-medium transition-colors"
                   >
                     Activate Bulk Mode
                   </button>
@@ -1101,7 +1099,7 @@ export default function App() {
                   placeholder="Search..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-4 py-1.5 bg-slate-100/50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:bg-white transition-colors"
+                  className="w-full pl-9 pr-4 py-1.5 bg-slate-100/50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/50 focus:bg-white transition-colors"
                 />
               </div>
 
@@ -1122,7 +1120,7 @@ export default function App() {
                 </button>
                 <button 
                   onClick={() => setIsAddLinkModalOpen(true)}
-                  className="flex items-center space-x-1.5 py-1.5 px-3 bg-indigo-600 rounded-lg text-sm font-medium text-white hover:bg-indigo-700 transition-all shadow-sm shadow-indigo-200"
+                  className="flex items-center space-x-1.5 py-1.5 px-3 bg-black rounded-lg text-sm font-medium text-white hover:bg-slate-800 transition-all shadow-sm shadow-slate-200"
                 >
                   <Plus size={16} />
                   <span className="hidden sm:inline">Add Link</span>
@@ -1136,7 +1134,7 @@ export default function App() {
             {breadcrumbs.map((f, i) => (
               <React.Fragment key={f.id}>
                 <span 
-                  className={`cursor-pointer transition-colors font-medium ${i === breadcrumbs.length - 1 ? 'text-slate-800' : 'hover:text-indigo-600'}`}
+                  className={`cursor-pointer transition-colors font-medium ${i === breadcrumbs.length - 1 ? 'text-slate-800' : 'hover:text-black'}`}
                   onClick={() => setCurrentFolderId(f.id)}
                 >
                   {f.name}
@@ -1148,14 +1146,14 @@ export default function App() {
 
           {/* Clipboard Banner */}
           {clipboard && (
-            <div className="bg-indigo-50 border-b border-indigo-100 px-4 sm:px-8 py-2 flex items-center justify-between text-sm">
-              <div className="flex items-center text-indigo-700">
+            <div className="bg-slate-100 border-b border-slate-200 px-4 sm:px-8 py-2 flex items-center justify-between text-sm">
+              <div className="flex items-center text-slate-800">
                 {clipboard.action === 'cut' ? <Scissors size={16} className="mr-2" /> : <Copy size={16} className="mr-2" />}
                 <span>{clipboard.ids.length} item(s) ready to {clipboard.action}</span>
               </div>
               <div className="flex space-x-2">
                 <button onClick={() => setClipboard(null)} className="px-3 py-1.5 text-slate-600 hover:bg-slate-200 rounded-md transition-colors">Cancel</button>
-                <button onClick={handlePaste} className="px-3 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md transition-colors flex items-center shadow-sm">
+                <button onClick={handlePaste} className="px-3 py-1.5 bg-black text-white hover:bg-slate-800 rounded-md transition-colors flex items-center shadow-sm">
                   <ClipboardPaste size={16} className="mr-1.5" />
                   Paste Here
                 </button>
@@ -1284,7 +1282,7 @@ export default function App() {
                       </button>
                       <button 
                         onClick={() => setIsAddLinkModalOpen(true)}
-                        className="px-4 py-2 bg-indigo-600 rounded-lg text-sm font-medium text-white hover:bg-indigo-700 transition-colors shadow-sm"
+                        className="px-4 py-2 bg-black rounded-lg text-sm font-medium text-white hover:bg-slate-800 transition-colors shadow-sm"
                       >
                         Add Link
                       </button>
@@ -1317,7 +1315,7 @@ export default function App() {
                   id="noteTitle"
                   value={newNoteTitle}
                   onChange={(e) => setNewNoteTitle(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800"
                   placeholder="e.g., Meeting Notes"
                   autoFocus
                 />
@@ -1328,7 +1326,7 @@ export default function App() {
                   id="noteContent"
                   value={newNoteContent}
                   onChange={(e) => setNewNoteContent(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[150px] resize-y"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800 min-h-[150px] resize-y"
                   placeholder="Write your note here..."
                 />
               </div>
@@ -1343,7 +1341,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={!newNoteTitle.trim() && !newNoteContent.trim()}
-                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 text-sm font-medium text-white bg-black hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save Note
                 </button>
@@ -1408,7 +1406,7 @@ export default function App() {
                   id="unityFolderName"
                   value={unityFolderName}
                   onChange={(e) => setUnityFolderName(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800"
                   placeholder="e.g., Project Resources"
                   autoFocus
                 />
@@ -1424,7 +1422,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={!unityFolderName.trim()}
-                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 text-sm font-medium text-white bg-black hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Create & Move
                 </button>
@@ -1521,7 +1519,7 @@ export default function App() {
                   autoFocus
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800"
                   placeholder="e.g., Research, Inspiration, Work"
                 />
               </div>
@@ -1536,7 +1534,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={!newFolderName.trim()}
-                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 text-sm font-medium text-white bg-black hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Create Folder
                 </button>
@@ -1566,7 +1564,7 @@ export default function App() {
                   required
                   value={newLinkUrl}
                   onChange={(e) => setNewLinkUrl(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800"
                   placeholder="https://example.com"
                 />
               </div>
@@ -1578,7 +1576,7 @@ export default function App() {
                   required
                   value={newLinkTitle}
                   onChange={(e) => setNewLinkTitle(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800"
                   placeholder="A descriptive title"
                 />
               </div>
@@ -1593,7 +1591,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={!newLinkUrl.trim() || !newLinkTitle.trim()}
-                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 text-sm font-medium text-white bg-black hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Add Link
                 </button>
