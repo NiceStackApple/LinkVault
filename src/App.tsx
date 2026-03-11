@@ -23,15 +23,20 @@ import {
   AlertTriangle,
   Search,
   Square,
-  FolderInput
+  FolderInput,
+  FileText,
+  AlignLeft,
+  Scissors,
+  ClipboardPaste
 } from 'lucide-react';
 
-type LinkType = 'youtube' | 'tiktok' | 'instagram' | 'general';
+type LinkType = 'youtube' | 'tiktok' | 'instagram' | 'general' | 'note';
 
 interface LinkItem {
   id: string;
   title: string;
   url: string;
+  content?: string;
   type: LinkType;
   dateAdded: number;
   starred?: boolean;
@@ -274,8 +279,9 @@ const LinkCard: React.FC<{
   onDelete: (id: string) => void,
   isSelected?: boolean,
   onClick?: (e: React.MouseEvent) => void,
-  onDoubleClick?: (e: React.MouseEvent) => void
-}> = ({ link, onUpdate, onDelete, isSelected, onClick, onDoubleClick }) => {
+  onDoubleClick?: (e: React.MouseEvent) => void,
+  onOpenNote?: (l: LinkItem) => void
+}> = ({ link, onUpdate, onDelete, isSelected, onClick, onDoubleClick, onOpenNote }) => {
   const [copied, setCopied] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -321,6 +327,7 @@ const LinkCard: React.FC<{
       case 'youtube': return <Youtube size={16} className="text-red-500" />;
       case 'instagram': return <Instagram size={16} className="text-pink-500" />;
       case 'tiktok': return <Video size={16} className="text-slate-800" />;
+      case 'note': return <FileText size={16} className="text-emerald-500" />;
       default: return <Globe size={16} className="text-blue-500" />;
     }
   };
@@ -335,7 +342,9 @@ const LinkCard: React.FC<{
   const handleDoubleClick = (e: React.MouseEvent) => {
     if (onDoubleClick) {
       onDoubleClick(e);
-    } else {
+    } else if (link.type === 'note' && onOpenNote) {
+      onOpenNote(link);
+    } else if (link.url) {
       window.open(link.url, '_blank');
     }
   };
@@ -346,7 +355,16 @@ const LinkCard: React.FC<{
       onClick={onClick}
       onDoubleClick={handleDoubleClick}
     >
-      {link.type === 'youtube' && getYoutubeThumbnail(link.url) ? (
+      {link.type === 'note' ? (
+        <div className="h-32 w-full bg-emerald-50 relative overflow-hidden rounded-t-xl p-4 border-b border-emerald-100/50">
+          <p className="text-xs text-slate-600 line-clamp-4 whitespace-pre-wrap font-mono">
+            {link.content || 'Empty note...'}
+          </p>
+          <div className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full shadow-sm">
+            <Icon />
+          </div>
+        </div>
+      ) : link.type === 'youtube' && getYoutubeThumbnail(link.url) ? (
         <div className="h-32 w-full bg-slate-100 relative overflow-hidden rounded-t-xl">
           <img src={getYoutubeThumbnail(link.url)!} alt={link.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
           <div className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full shadow-sm">
@@ -442,39 +460,58 @@ const LinkCard: React.FC<{
           </div>
         </div>
         
-        <a 
-          href={link.url} 
-          target="_blank" 
-          rel="noopener noreferrer"
-          className="text-xs text-slate-500 truncate hover:text-indigo-500 transition-colors mb-4 block"
-        >
-          {getDomain(link.url)}
-        </a>
+        {link.type === 'note' ? (
+          <div className="text-xs text-emerald-600/80 truncate mb-4 block flex items-center">
+            <AlignLeft size={12} className="mr-1" /> Text Note
+          </div>
+        ) : (
+          <a 
+            href={link.url} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-xs text-slate-500 truncate hover:text-indigo-500 transition-colors mb-4 block"
+            onClick={e => { if (onDoubleClick) e.preventDefault(); }}
+          >
+            {getDomain(link.url)}
+          </a>
+        )}
         
         <div className="mt-auto flex items-center justify-between">
           <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">
             {new Date(link.dateAdded).toLocaleDateString()}
           </span>
           <div className="flex space-x-2">
-            <button 
-              onClick={handleCopy}
-              className={`flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${
-                copied ? 'bg-emerald-50 text-emerald-600' : 'text-slate-600 bg-slate-100 hover:bg-slate-200'
-              }`}
-            >
-              {copied ? <Check size={12} /> : <Copy size={12} />}
-              <span>{copied ? 'Copied' : 'Copy'}</span>
-            </button>
-            <a 
-              href={link.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
-              onClick={e => e.stopPropagation()}
-            >
-              <ExternalLink size={12} />
-              <span>Open</span>
-            </a>
+            {link.type !== 'note' && (
+              <button 
+                onClick={handleCopy}
+                className={`flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${
+                  copied ? 'bg-emerald-50 text-emerald-600' : 'text-slate-600 bg-slate-100 hover:bg-slate-200'
+                }`}
+              >
+                {copied ? <Check size={12} /> : <Copy size={12} />}
+                <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
+            )}
+            {link.type === 'note' ? (
+              <button 
+                onClick={(e) => { e.stopPropagation(); if (onOpenNote) onOpenNote(link); }}
+                className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-emerald-600 bg-emerald-50 hover:bg-emerald-100"
+              >
+                <Edit2 size={12} />
+                <span>Edit</span>
+              </button>
+            ) : (
+              <a 
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
+                onClick={e => e.stopPropagation()}
+              >
+                <ExternalLink size={12} />
+                <span>Open</span>
+              </a>
+            )}
           </div>
         </div>
       </div>
@@ -529,7 +566,7 @@ const FolderCard: React.FC<{
           isEditing={isEditing}
           setIsEditing={setIsEditing}
         />
-        <p className="text-xs text-slate-500 mt-0.5">{folder.folders.length} folders, {folder.links.length} links</p>
+        <p className="text-xs text-slate-500 mt-0.5">{folder.folders.length} folders, {folder.links.length} items</p>
       </div>
       
       <div className="relative" ref={menuRef}>
@@ -623,23 +660,18 @@ const SidebarFolder: React.FC<{ folder: Folder, currentFolderId: string, onSelec
   );
 };
 
-const FolderTreeItem: React.FC<{ folder: Folder, depth?: number, onSelect: (id: string) => void, selectedId: string }> = ({ folder, depth = 0, onSelect, selectedId }) => {
-  return (
-    <div>
-      <div 
-        className={`flex items-center py-2 px-3 cursor-pointer hover:bg-slate-50 ${selectedId === folder.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700'}`}
-        style={{ paddingLeft: `${depth * 1.5 + 0.75}rem` }}
-        onClick={() => onSelect(folder.id)}
-      >
-        <FolderIcon size={16} className={`mr-2 ${selectedId === folder.id ? 'text-indigo-500' : 'text-slate-400'}`} style={folder.color && selectedId !== folder.id ? { color: folder.color } : undefined} />
-        <span className="text-sm font-medium truncate">{folder.name}</span>
-      </div>
-      {folder.folders.map(f => (
-        <FolderTreeItem key={f.id} folder={f} depth={depth + 1} onSelect={onSelect} selectedId={selectedId} />
-      ))}
-    </div>
-  );
-};
+const cloneLink = (link: LinkItem): LinkItem => ({
+  ...link,
+  id: generateId(),
+  dateAdded: Date.now()
+});
+
+const cloneFolder = (folder: Folder): Folder => ({
+  ...folder,
+  id: generateId(),
+  folders: folder.folders.map(cloneFolder),
+  links: folder.links.map(cloneLink)
+});
 
 export default function App() {
   const [rootFolder, setRootFolder] = useState<Folder>(() => {
@@ -662,8 +694,7 @@ export default function App() {
   const [explicitBulkMode, setExplicitBulkMode] = useState(false);
   const isBulkMode = selectedItemIds.length >= 2 || explicitBulkMode;
   
-  const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
-  const [moveTargetFolderId, setMoveTargetFolderId] = useState<string>('root');
+  const [clipboard, setClipboard] = useState<{ ids: string[], action: 'copy' | 'cut' } | null>(null);
   
   const [isUnityModalOpen, setIsUnityModalOpen] = useState(false);
   const [unityFolderName, setUnityFolderName] = useState('');
@@ -671,11 +702,15 @@ export default function App() {
   // Modals
   const [isCreateFolderModalOpen, setIsCreateFolderModalOpen] = useState(false);
   const [isAddLinkModalOpen, setIsAddLinkModalOpen] = useState(false);
+  const [isAddNoteModalOpen, setIsAddNoteModalOpen] = useState(false);
+  const [viewNoteItem, setViewNoteItem] = useState<LinkItem | null>(null);
   
   // Form states
   const [newFolderName, setNewFolderName] = useState('');
   const [newLinkUrl, setNewLinkUrl] = useState('');
   const [newLinkTitle, setNewLinkTitle] = useState('');
+  const [newNoteTitle, setNewNoteTitle] = useState('');
+  const [newNoteContent, setNewNoteContent] = useState('');
 
   const [folderToDelete, setFolderToDelete] = useState<Folder | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
@@ -763,6 +798,34 @@ export default function App() {
     setIsAddLinkModalOpen(false);
   };
 
+  const handleAddNote = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newNoteTitle.trim() && !newNoteContent.trim()) return;
+    
+    const newNote: LinkItem = {
+      id: generateId(),
+      title: newNoteTitle.trim() || 'Untitled Note',
+      url: '',
+      content: newNoteContent,
+      type: 'note',
+      dateAdded: Date.now()
+    };
+
+    setRootFolder(prev => updateFolder(prev, currentFolderId, f => ({
+      ...f,
+      links: [newNote, ...f.links]
+    })));
+
+    setNewNoteTitle('');
+    setNewNoteContent('');
+    setIsAddNoteModalOpen(false);
+  };
+
+  const handleUpdateNoteContent = (id: string, newContent: string) => {
+    setRootFolder(prev => updateLinkInTree(prev, { ...viewNoteItem!, content: newContent }));
+    setViewNoteItem(prev => prev ? { ...prev, content: newContent } : null);
+  };
+
   const handleDeleteFolder = (id: string) => {
     setRootFolder(prev => deleteFolder(prev, id));
     if (currentFolderId === id) {
@@ -784,9 +847,15 @@ export default function App() {
 
   const toggleItemSelection = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setSelectedItemIds(prev => 
-      prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
-    );
+    if (explicitBulkMode) {
+      setSelectedItemIds(prev => 
+        prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
+      );
+    } else {
+      setSelectedItemIds(prev => 
+        prev.includes(id) && prev.length === 1 ? [] : [id]
+      );
+    }
   };
 
   const handleBulkDelete = () => {
@@ -803,15 +872,42 @@ export default function App() {
     setExplicitBulkMode(false);
   };
 
-  const handleBulkMove = () => {
-    setRootFolder(prev => {
-      const itemsToMove = getTopLevelSelectedItems(prev, selectedItemIds);
-      const treeWithoutItems = removeItemsByIds(prev, selectedItemIds);
-      return addItemsToFolder(treeWithoutItems, moveTargetFolderId, itemsToMove);
-    });
+  const handleCut = () => {
+    setClipboard({ ids: selectedItemIds, action: 'cut' });
     setSelectedItemIds([]);
     setExplicitBulkMode(false);
-    setIsMoveModalOpen(false);
+  };
+
+  const handleCopyItems = () => {
+    setClipboard({ ids: selectedItemIds, action: 'copy' });
+    setSelectedItemIds([]);
+    setExplicitBulkMode(false);
+  };
+
+  const handlePaste = () => {
+    if (!clipboard) return;
+
+    setRootFolder(prev => {
+      const itemsToPaste = getTopLevelSelectedItems(prev, clipboard.ids);
+      
+      let tree = prev;
+      if (clipboard.action === 'cut') {
+        tree = removeItemsByIds(tree, clipboard.ids);
+      }
+
+      const finalItems = clipboard.action === 'copy' 
+        ? {
+            folders: itemsToPaste.folders.map(cloneFolder),
+            links: itemsToPaste.links.map(cloneLink)
+          }
+        : itemsToPaste;
+
+      return addItemsToFolder(tree, currentFolderId, finalItems);
+    });
+
+    if (clipboard.action === 'cut') {
+      setClipboard(null);
+    }
   };
 
   const handleUnity = (e: React.FormEvent) => {
@@ -945,99 +1041,128 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col h-full overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100/50">
-        {/* Header */}
-        {selectedItemIds.length > 0 ? (
-          <header className="h-16 bg-indigo-50/90 backdrop-blur-md border-b border-indigo-100 flex items-center px-4 sm:px-8 justify-between sticky top-0 z-10 gap-4">
-            <div className="flex items-center">
-              <button onClick={() => { setSelectedItemIds([]); setExplicitBulkMode(false); }} className="p-2 text-slate-500 hover:bg-slate-200 rounded-full mr-2">
-                <X size={20} />
-              </button>
-              <span className="font-medium text-indigo-900">{selectedItemIds.length} selected</span>
-            </div>
-            
-            <div className="flex items-center space-x-2">
-              {!isBulkMode ? (
-                <button 
-                  onClick={() => setExplicitBulkMode(true)}
-                  className="px-4 py-1.5 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded-lg text-sm font-medium transition-colors"
-                >
-                  Activate Bulk Mode
+        {/* Header Area */}
+        <div className="sticky top-0 z-10 flex flex-col shadow-sm">
+          {selectedItemIds.length > 0 ? (
+            <header className="h-16 bg-indigo-50/90 backdrop-blur-md border-b border-indigo-100 flex items-center px-4 sm:px-8 justify-between gap-4">
+              <div className="flex items-center">
+                <button onClick={() => { setSelectedItemIds([]); setExplicitBulkMode(false); }} className="p-2 text-slate-500 hover:bg-slate-200 rounded-full mr-2">
+                  <X size={20} />
                 </button>
-              ) : (
-                <>
-                  <button onClick={handleBulkStar} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Star">
-                    <Star size={20} />
-                  </button>
-                  <button onClick={handleBulkDelete} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Delete">
-                    <Trash2 size={20} />
-                  </button>
-                  <button onClick={() => setIsUnityModalOpen(true)} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Unity in new folder">
-                    <FolderInput size={20} />
-                  </button>
-                  <button onClick={() => { setMoveTargetFolderId('root'); setIsMoveModalOpen(true); }} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Move">
-                    <FolderIcon size={20} />
-                  </button>
-                </>
-              )}
-            </div>
-          </header>
-        ) : (
-          <header className="h-16 bg-white/60 backdrop-blur-md border-b border-slate-200/60 flex items-center px-4 sm:px-8 justify-between sticky top-0 z-10 gap-4">
-            <div className="flex items-center min-w-0">
-              <button 
-                className="mr-2 lg:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-md flex-shrink-0"
-                onClick={() => setIsSidebarOpen(true)}
-              >
-                <Menu size={20} />
-              </button>
+                <span className="font-medium text-indigo-900">{selectedItemIds.length} selected</span>
+              </div>
               
-              {/* Breadcrumbs */}
-              <div className="hidden md:flex items-center space-x-1 sm:space-x-2 text-sm text-slate-500 overflow-x-auto whitespace-nowrap hide-scrollbar">
-                {breadcrumbs.map((f, i) => (
-                  <React.Fragment key={f.id}>
-                    <span 
-                      className={`cursor-pointer transition-colors font-medium ${i === breadcrumbs.length - 1 ? 'text-slate-800' : 'hover:text-indigo-600'}`}
-                      onClick={() => setCurrentFolderId(f.id)}
-                    >
-                      {f.name}
-                    </span>
-                    {i < breadcrumbs.length - 1 && <ChevronRight size={14} className="flex-shrink-0 text-slate-400" />}
-                  </React.Fragment>
-                ))}
+              <div className="flex items-center space-x-2">
+                {!isBulkMode ? (
+                  <button 
+                    onClick={() => setExplicitBulkMode(true)}
+                    className="px-4 py-1.5 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Activate Bulk Mode
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={handleCopyItems} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Copy">
+                      <Copy size={20} />
+                    </button>
+                    <button onClick={handleCut} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Cut">
+                      <Scissors size={20} />
+                    </button>
+                    <button onClick={handleBulkStar} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Star">
+                      <Star size={20} />
+                    </button>
+                    <button onClick={handleBulkDelete} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Delete">
+                      <Trash2 size={20} />
+                    </button>
+                    <button onClick={() => setIsUnityModalOpen(true)} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Unity in new folder">
+                      <FolderInput size={20} />
+                    </button>
+                  </>
+                )}
+              </div>
+            </header>
+          ) : (
+            <header className="h-16 bg-white/60 backdrop-blur-md border-b border-slate-200/60 flex items-center px-4 sm:px-8 justify-between gap-4">
+              <div className="flex items-center min-w-0">
+                <button 
+                  className="mr-2 lg:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-md flex-shrink-0"
+                  onClick={() => setIsSidebarOpen(true)}
+                >
+                  <Menu size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 max-w-md relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Search size={16} className="text-slate-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-4 py-1.5 bg-slate-100/50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:bg-white transition-colors"
+                />
+              </div>
+
+              <div className="flex items-center space-x-2 flex-shrink-0">
+                <button 
+                  onClick={() => setIsCreateFolderModalOpen(true)}
+                  className="flex items-center space-x-1.5 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
+                >
+                  <FolderIcon size={16} className="text-slate-500" />
+                  <span className="hidden sm:inline">New Folder</span>
+                </button>
+                <button 
+                  onClick={() => setIsAddNoteModalOpen(true)}
+                  className="flex items-center space-x-1.5 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
+                >
+                  <FileText size={16} className="text-slate-500" />
+                  <span className="hidden sm:inline">Add Note</span>
+                </button>
+                <button 
+                  onClick={() => setIsAddLinkModalOpen(true)}
+                  className="flex items-center space-x-1.5 py-1.5 px-3 bg-indigo-600 rounded-lg text-sm font-medium text-white hover:bg-indigo-700 transition-all shadow-sm shadow-indigo-200"
+                >
+                  <Plus size={16} />
+                  <span className="hidden sm:inline">Add Link</span>
+                </button>
+              </div>
+            </header>
+          )}
+
+          {/* Breadcrumbs Row */}
+          <div className="px-4 sm:px-8 py-2 flex items-center space-x-1 sm:space-x-2 text-sm text-slate-500 overflow-x-auto whitespace-nowrap hide-scrollbar border-b border-slate-200/60 bg-slate-50/90 backdrop-blur-md">
+            {breadcrumbs.map((f, i) => (
+              <React.Fragment key={f.id}>
+                <span 
+                  className={`cursor-pointer transition-colors font-medium ${i === breadcrumbs.length - 1 ? 'text-slate-800' : 'hover:text-indigo-600'}`}
+                  onClick={() => setCurrentFolderId(f.id)}
+                >
+                  {f.name}
+                </span>
+                {i < breadcrumbs.length - 1 && <ChevronRight size={14} className="flex-shrink-0 text-slate-400" />}
+              </React.Fragment>
+            ))}
+          </div>
+
+          {/* Clipboard Banner */}
+          {clipboard && (
+            <div className="bg-indigo-50 border-b border-indigo-100 px-4 sm:px-8 py-2 flex items-center justify-between text-sm">
+              <div className="flex items-center text-indigo-700">
+                {clipboard.action === 'cut' ? <Scissors size={16} className="mr-2" /> : <Copy size={16} className="mr-2" />}
+                <span>{clipboard.ids.length} item(s) ready to {clipboard.action}</span>
+              </div>
+              <div className="flex space-x-2">
+                <button onClick={() => setClipboard(null)} className="px-3 py-1.5 text-slate-600 hover:bg-slate-200 rounded-md transition-colors">Cancel</button>
+                <button onClick={handlePaste} className="px-3 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md transition-colors flex items-center shadow-sm">
+                  <ClipboardPaste size={16} className="mr-1.5" />
+                  Paste Here
+                </button>
               </div>
             </div>
-
-            <div className="flex-1 max-w-md relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Search size={16} className="text-slate-400" />
-              </div>
-              <input
-                type="text"
-                placeholder="Search..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-1.5 bg-slate-100/50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:bg-white transition-colors"
-              />
-            </div>
-
-            <div className="flex items-center space-x-2 flex-shrink-0">
-              <button 
-                onClick={() => setIsCreateFolderModalOpen(true)}
-                className="flex items-center space-x-1.5 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
-              >
-                <FolderIcon size={16} className="text-slate-500" />
-                <span className="hidden sm:inline">New Folder</span>
-              </button>
-              <button 
-                onClick={() => setIsAddLinkModalOpen(true)}
-                className="flex items-center space-x-1.5 py-1.5 px-3 bg-indigo-600 rounded-lg text-sm font-medium text-white hover:bg-indigo-700 transition-all shadow-sm shadow-indigo-200"
-              >
-                <Plus size={16} />
-                <span className="hidden sm:inline">Add Link</span>
-              </button>
-            </div>
-          </header>
-        )}
+          )}
+        </div>
 
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
@@ -1073,7 +1198,7 @@ export default function App() {
 
                 {searchResults.links.length > 0 && (
                   <div>
-                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Links</h3>
+                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Items</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                       {searchResults.links.map(link => (
                         <LinkCard 
@@ -1083,6 +1208,7 @@ export default function App() {
                           onDelete={handleDeleteLink}
                           isSelected={selectedItemIds.includes(link.id)}
                           onClick={(e) => toggleItemSelection(link.id, e)}
+                          onOpenNote={setViewNoteItem}
                         />
                       ))}
                     </div>
@@ -1121,10 +1247,10 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Links Section */}
+                {/* Items Section */}
                 {currentFolder.links.length > 0 && (
                   <div>
-                    <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Links</h2>
+                    <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Items</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                       {currentFolder.links.map(link => (
                         <LinkCard 
@@ -1134,6 +1260,7 @@ export default function App() {
                           onDelete={handleDeleteLink}
                           isSelected={selectedItemIds.includes(link.id)}
                           onClick={(e) => toggleItemSelection(link.id, e)}
+                          onOpenNote={setViewNoteItem}
                         />
                       ))}
                     </div>
@@ -1171,6 +1298,96 @@ export default function App() {
       </main>
 
       {/* Modals */}
+      
+      {/* Add Note Modal */}
+      {isAddNoteModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-slate-800">Add New Note</h3>
+              <button onClick={() => setIsAddNoteModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+            <form onSubmit={handleAddNote} className="p-6">
+              <div className="mb-4">
+                <label htmlFor="noteTitle" className="block text-sm font-medium text-slate-700 mb-1">Title</label>
+                <input
+                  type="text"
+                  id="noteTitle"
+                  value={newNoteTitle}
+                  onChange={(e) => setNewNoteTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="e.g., Meeting Notes"
+                  autoFocus
+                />
+              </div>
+              <div className="mb-6">
+                <label htmlFor="noteContent" className="block text-sm font-medium text-slate-700 mb-1">Content</label>
+                <textarea
+                  id="noteContent"
+                  value={newNoteContent}
+                  onChange={(e) => setNewNoteContent(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[150px] resize-y"
+                  placeholder="Write your note here..."
+                />
+              </div>
+              <div className="flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddNoteModalOpen(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newNoteTitle.trim() && !newNoteContent.trim()}
+                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save Note
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* View/Edit Note Modal */}
+      {viewNoteItem && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-emerald-50/50">
+              <div className="flex items-center text-emerald-700">
+                <FileText size={20} className="mr-2" />
+                <h3 className="text-lg font-semibold">{viewNoteItem.title}</h3>
+              </div>
+              <button onClick={() => setViewNoteItem(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <textarea
+                value={viewNoteItem.content || ''}
+                onChange={(e) => handleUpdateNoteContent(viewNoteItem.id, e.target.value)}
+                className="w-full h-full min-h-[300px] p-0 border-0 focus:ring-0 resize-none text-slate-700 leading-relaxed bg-transparent"
+                placeholder="Write your note here..."
+              />
+            </div>
+            <div className="px-6 py-4 border-t border-slate-100 flex justify-between items-center bg-slate-50">
+              <span className="text-xs text-slate-400">
+                Last edited: {new Date(viewNoteItem.dateAdded).toLocaleString()}
+              </span>
+              <button
+                onClick={() => setViewNoteItem(null)}
+                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Unity Modal */}
       {isUnityModalOpen && (
@@ -1217,42 +1434,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Move Modal */}
-      {isMoveModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="text-lg font-semibold text-slate-800">Move {selectedItemIds.length} items</h3>
-              <button onClick={() => setIsMoveModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6">
-              <p className="text-sm text-slate-600 mb-4">Select destination folder:</p>
-              <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg mb-4 py-2 custom-scrollbar">
-                <FolderTreeItem folder={rootFolder} onSelect={setMoveTargetFolderId} selectedId={moveTargetFolderId} />
-              </div>
-              <div className="flex justify-end space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setIsMoveModalOpen(false)}
-                  className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleBulkMove}
-                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
-                >
-                  Move Here
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Delete Folder Modal */}
       {folderToDelete && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1275,7 +1456,7 @@ export default function App() {
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-4">
                   <p className="text-sm text-orange-800 font-medium mb-1">Warning: This folder is not empty!</p>
                   <p className="text-xs text-orange-700">
-                    It contains {folderToDelete.folders.length} sub-folder(s) and {folderToDelete.links.length} link(s). 
+                    It contains {folderToDelete.folders.length} sub-folder(s) and {folderToDelete.links.length} item(s). 
                     Deleting this folder will permanently remove all its contents.
                   </p>
                 </div>
