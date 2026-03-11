@@ -1,0 +1,5 @@
+{
+  "name": "LinkVault Pro",
+  "description": "A sophisticated Link Management App with a recursive directory system, supporting various link types and local storage persistence.",
+  "requestFramePermissions": []
+}
