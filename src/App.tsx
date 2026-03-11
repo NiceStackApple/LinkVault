@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { faviconBase64 } from './faviconBase64';
 import { 
   Folder as FolderIcon, 
   ChevronRight, 
@@ -994,7 +995,7 @@ export default function App() {
       `}>
         <div className="p-5 border-b border-slate-200/60 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <img src="/favicon.png" alt="LinkVaultPro Logo" className="w-8 h-8 rounded-lg" referrerPolicy="no-referrer" />
+            <img src={faviconBase64} alt="LinkVaultPro Logo" className="w-8 h-8 rounded-lg" referrerPolicy="no-referrer" />
             <h1 className="text-xl font-bold tracking-tight text-black">LinkVault<span className="font-normal">Pro</span></h1>
           </div>
           <button className="lg:hidden text-slate-500 hover:text-slate-800" onClick={() => setIsSidebarOpen(false)}>
