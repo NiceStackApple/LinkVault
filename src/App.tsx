@@ -28,8 +28,14 @@ import {
   FileText,
   AlignLeft,
   Scissors,
-  ClipboardPaste
+  ClipboardPaste,
+  Lock
 } from 'lucide-react';
+
+import { auth, googleProvider } from './firebase';
+import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { syncToFirestore, fetchFromFirestore } from './sync';
+import ShareView from './ShareView';
 
 type LinkType = 'youtube' | 'tiktok' | 'instagram' | 'general' | 'note';
 
@@ -50,6 +56,8 @@ interface Folder {
   links: LinkItem[];
   starred?: boolean;
   color?: string;
+  isPublic?: boolean;
+  shareId?: string | null;
 }
 
 const FOLDER_COLORS = [
@@ -352,7 +360,7 @@ const LinkCard: React.FC<{
 
   return (
     <div 
-      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl overflow-visible flex flex-col transition-all relative cursor-pointer ${isSelected ? 'border-slate-800 ring-1 ring-slate-800 bg-slate-100/50' : 'border-white/40'}`}
+      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl overflow-visible flex flex-col transition-all relative cursor-pointer ${isSelected ? 'border-slate-800 ring-1 ring-slate-800 bg-slate-100/50' : 'border-white/40'} ${showMenu ? 'z-50' : 'z-10'}`}
       onClick={onClick}
       onDoubleClick={handleDoubleClick}
     >
@@ -526,8 +534,10 @@ const FolderCard: React.FC<{
   onClick?: (e: React.MouseEvent) => void,
   onUpdate: (f: Folder) => void, 
   onDeleteRequest: (f: Folder) => void,
-  isSelected?: boolean
-}> = ({ folder, onDoubleClick, onClick, onUpdate, onDeleteRequest, isSelected }) => {
+  onShareRequest?: (f: Folder) => void,
+  isSelected?: boolean,
+  user?: any
+}> = ({ folder, onDoubleClick, onClick, onUpdate, onDeleteRequest, onShareRequest, isSelected, user }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -544,7 +554,7 @@ const FolderCard: React.FC<{
 
   return (
     <div 
-      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl p-4 flex items-center cursor-pointer transition-all hover:border-slate-300 relative overflow-visible ${isSelected ? 'border-slate-800 ring-1 ring-slate-800 bg-slate-100/50' : 'border-white/40'}`}
+      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl p-4 flex items-center cursor-pointer transition-all hover:border-slate-300 relative overflow-visible ${isSelected ? 'border-slate-800 ring-1 ring-slate-800 bg-slate-100/50' : 'border-white/40'} ${showMenu ? 'z-50' : 'z-10'}`}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       title="Double-click to open"
@@ -557,6 +567,15 @@ const FolderCard: React.FC<{
         {folder.starred && (
           <div className="absolute -top-1 -right-1 bg-yellow-400 rounded-full p-0.5 border-2 border-white">
             <Star size={8} className="fill-white text-white" />
+          </div>
+        )}
+        {folder.isPublic ? (
+          <div className="absolute -bottom-1 -right-1 bg-blue-500 rounded-full p-0.5 border-2 border-white" title="Publicly shared">
+            <Globe size={10} className="text-white" />
+          </div>
+        ) : (
+          <div className="absolute -bottom-1 -right-1 bg-slate-400 rounded-full p-0.5 border-2 border-white" title="Private folder">
+            <Lock size={10} className="text-white" />
           </div>
         )}
       </div>
@@ -615,6 +634,15 @@ const FolderCard: React.FC<{
               <Edit2 size={14} className="mr-2" />
               Rename
             </button>
+            {user && onShareRequest && (
+              <button 
+                className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center"
+                onClick={(e) => { e.stopPropagation(); onShareRequest(folder); setShowMenu(false); }}
+              >
+                <Globe size={14} className="mr-2" />
+                Share folder
+              </button>
+            )}
             <div className="h-px bg-slate-100 my-1"></div>
             <button 
               className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
@@ -674,7 +702,31 @@ const cloneFolder = (folder: Folder): Folder => ({
   links: folder.links.map(cloneLink)
 });
 
+const setPublicRecursive = (folder: Folder, isPublic: boolean): Folder => {
+  return {
+    ...folder,
+    isPublic,
+    folders: folder.folders.map(f => setPublicRecursive(f, isPublic))
+  };
+};
+
 export default function App() {
+  const [hash, setHash] = useState(window.location.hash);
+
+  useEffect(() => {
+    const handleHashChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  if (hash.startsWith('#/share/')) {
+    const shareId = hash.replace('#/share/', '');
+    return <ShareView shareId={shareId} />;
+  }
+
+  const [user, setUser] = useState<User | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
   const [rootFolder, setRootFolder] = useState<Folder>(() => {
     const saved = localStorage.getItem('linkvault_backup');
     if (saved) {
@@ -686,6 +738,64 @@ export default function App() {
     }
     return INITIAL_STATE;
   });
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        setIsSyncing(true);
+        try {
+          const remoteData = await fetchFromFirestore(currentUser.uid);
+          
+          let mergedData = remoteData;
+          // Merge local data if it exists
+          const savedLocal = localStorage.getItem('linkvault_backup');
+          let localData = INITIAL_STATE;
+          if (savedLocal) {
+            try {
+              localData = JSON.parse(savedLocal);
+            } catch (e) {}
+          }
+
+          if (localData.folders.length > 0 || localData.links.length > 0) {
+            const newFolders = localData.folders.filter(lf => !remoteData.folders.some(rf => rf.id === lf.id));
+            const newLinks = localData.links.filter(ll => !remoteData.links.some(rl => rl.id === ll.id));
+            
+            if (newFolders.length > 0 || newLinks.length > 0) {
+              mergedData = {
+                ...remoteData,
+                folders: [...remoteData.folders, ...newFolders],
+                links: [...remoteData.links, ...newLinks]
+              };
+              await syncToFirestore(currentUser.uid, mergedData);
+            }
+            // Clear local storage after successful merge
+            localStorage.removeItem('linkvault_backup');
+          } else if (remoteData.folders.length === 0 && remoteData.links.length === 0) {
+            // First time login with no local data, just sync empty state
+            await syncToFirestore(currentUser.uid, localData);
+          }
+          
+          setRootFolder(mergedData);
+        } catch (error) {
+          console.error("Error fetching from Firestore", error);
+        } finally {
+          setIsSyncing(false);
+        }
+      } else {
+        // Revert to local storage
+        const saved = localStorage.getItem('linkvault_backup');
+        if (saved) {
+          try {
+            setRootFolder(JSON.parse(saved));
+          } catch (e) {}
+        } else {
+          setRootFolder(INITIAL_STATE);
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   const [currentFolderId, setCurrentFolderId] = useState<string>('root');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -704,6 +814,8 @@ export default function App() {
   const [isCreateFolderModalOpen, setIsCreateFolderModalOpen] = useState(false);
   const [isAddLinkModalOpen, setIsAddLinkModalOpen] = useState(false);
   const [isAddNoteModalOpen, setIsAddNoteModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [folderToShare, setFolderToShare] = useState<Folder | null>(null);
   const [viewNoteItem, setViewNoteItem] = useState<LinkItem | null>(null);
   
   // Form states
@@ -720,8 +832,21 @@ export default function App() {
 
   // Auto-save
   useEffect(() => {
-    localStorage.setItem('linkvault_backup', JSON.stringify(rootFolder));
-  }, [rootFolder]);
+    if (user) {
+      if (!isSyncing) {
+        syncToFirestore(user.uid, rootFolder).catch(console.error);
+      }
+    } else {
+      localStorage.setItem('linkvault_backup', JSON.stringify(rootFolder));
+    }
+  }, [rootFolder, user, isSyncing]);
+
+  // Disable bulk mode when no items are selected
+  useEffect(() => {
+    if (selectedItemIds.length === 0 && explicitBulkMode) {
+      setExplicitBulkMode(false);
+    }
+  }, [selectedItemIds.length, explicitBulkMode]);
 
   const currentFolder = findFolder(rootFolder, currentFolderId) || rootFolder;
   const breadcrumbs = getBreadcrumbs(rootFolder, currentFolderId) || [rootFolder];
@@ -754,11 +879,16 @@ export default function App() {
     e.preventDefault();
     if (!newFolderName.trim()) return;
     
+    // Find parent folder to check if it's public
+    const parentFolder = currentFolderId === 'root' ? rootFolder : findFolder(rootFolder, currentFolderId);
+    const isPublic = parentFolder?.isPublic || false;
+    
     const newFolder: Folder = {
       id: generateId(),
       name: newFolderName.trim(),
       folders: [],
-      links: []
+      links: [],
+      isPublic
     };
     
     setRootFolder(prev => updateFolder(prev, currentFolderId, f => ({
@@ -915,19 +1045,24 @@ export default function App() {
     e.preventDefault();
     if (!unityFolderName.trim()) return;
     
+    // Find parent folder to check if it's public
+    const parentFolder = currentFolderId === 'root' ? rootFolder : findFolder(rootFolder, currentFolderId);
+    const isPublic = parentFolder?.isPublic || false;
+    
     const newFolderId = Date.now().toString();
     const newFolder: Folder = {
       id: newFolderId,
       name: unityFolderName.trim(),
       folders: [],
-      links: []
+      links: [],
+      isPublic
     };
 
     setRootFolder(prev => {
       const itemsToMove = getTopLevelSelectedItems(prev, selectedItemIds);
       let treeWithoutItems = removeItemsByIds(prev, selectedItemIds);
       
-      newFolder.folders = itemsToMove.folders;
+      newFolder.folders = itemsToMove.folders.map(f => setPublicRecursive(f, isPublic));
       newFolder.links = itemsToMove.links;
       
       return updateFolder(treeWithoutItems, currentFolderId, f => ({
@@ -1011,31 +1146,33 @@ export default function App() {
           />
         </div>
 
-        <div className="p-4 border-t border-slate-200/60 bg-slate-50/50">
-          <div className="flex space-x-2">
-            <button 
-              onClick={handleExport}
-              className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
-            >
-              <Download size={16} />
-              <span>Export</span>
-            </button>
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
-            >
-              <Upload size={16} />
-              <span>Import</span>
-            </button>
-            <input 
-              type="file" 
-              accept=".json" 
-              className="hidden" 
-              ref={fileInputRef}
-              onChange={handleImport}
-            />
+        {!user && (
+          <div className="p-4 border-t border-slate-200/60 bg-slate-50/50">
+            <div className="flex space-x-2">
+              <button 
+                onClick={handleExport}
+                className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
+              >
+                <Download size={16} />
+                <span>Export</span>
+              </button>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
+              >
+                <Upload size={16} />
+                <span>Import</span>
+              </button>
+              <input 
+                type="file" 
+                accept=".json" 
+                className="hidden" 
+                ref={fileInputRef}
+                onChange={handleImport}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </aside>
 
       {/* Main Content */}
@@ -1126,6 +1263,32 @@ export default function App() {
                   <Plus size={16} />
                   <span className="hidden sm:inline">Add Link</span>
                 </button>
+                <div className="h-6 w-px bg-slate-200 mx-2"></div>
+                {user ? (
+                  <div className="relative group">
+                    <button className="flex items-center space-x-2 focus:outline-none">
+                      <img src={user.photoURL || ''} alt={user.displayName || 'User'} className="w-8 h-8 rounded-full border border-slate-200" referrerPolicy="no-referrer" />
+                      <span className="text-sm font-medium text-slate-700 hidden sm:block">{user.displayName?.split(' ')[0]}</span>
+                    </button>
+                    <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg border border-slate-100 py-1 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                      <div className="px-4 py-2 border-b border-slate-100">
+                        <p className="text-sm font-medium text-slate-800 truncate">{user.displayName}</p>
+                        <p className="text-xs text-slate-500 truncate">{user.email}</p>
+                      </div>
+                      <button 
+                        onClick={() => signOut(auth)} 
+                        className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                      >
+                        Sign Out
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => signInWithPopup(auth, googleProvider)} className="flex items-center space-x-2 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-all shadow-sm">
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-4 h-4" />
+                    <span className="hidden sm:inline">Sign In</span>
+                  </button>
+                )}
               </div>
             </header>
           )}
@@ -1188,7 +1351,9 @@ export default function App() {
                           onClick={(e) => toggleItemSelection(folder.id, e)}
                           onUpdate={(updatedFolder) => handleUpdateFolder(updatedFolder)}
                           onDeleteRequest={(f) => setFolderToDelete(f)}
+                          onShareRequest={(f) => { setFolderToShare(f); setIsShareModalOpen(true); }}
                           isSelected={selectedItemIds.includes(folder.id)}
+                          user={user}
                         />
                       ))}
                     </div>
@@ -1239,7 +1404,9 @@ export default function App() {
                           onClick={(e) => toggleItemSelection(folder.id, e)}
                           onUpdate={(updatedFolder) => handleUpdateFolder(updatedFolder)}
                           onDeleteRequest={(f) => setFolderToDelete(f)}
+                          onShareRequest={(f) => { setFolderToShare(f); setIsShareModalOpen(true); }}
                           isSelected={selectedItemIds.includes(folder.id)}
+                          user={user}
                         />
                       ))}
                     </div>
@@ -1295,6 +1462,117 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {/* Share Folder Modal */}
+      {isShareModalOpen && folderToShare && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center">
+              <h2 className="text-lg font-semibold text-slate-800 flex items-center">
+                <Globe size={20} className="mr-2 text-blue-500" />
+                Share "{folderToShare.name}"
+              </h2>
+              <button onClick={() => setIsShareModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-5">
+              {!folderToShare.isPublic ? (
+                <div className="text-center py-4">
+                  <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Globe size={32} className="text-blue-500" />
+                  </div>
+                  <h3 className="text-lg font-medium text-slate-800 mb-2">Make this folder public</h3>
+                  <p className="text-sm text-slate-500 mb-6">
+                    Anyone with the link will be able to view this folder and its contents. They won't be able to edit or delete anything.
+                  </p>
+                  <button
+                    onClick={async () => {
+                      if (!user) return;
+                      const shareId = generateId();
+                      const updatedFolder = { ...setPublicRecursive(folderToShare, true), shareId };
+                      handleUpdateFolder(updatedFolder);
+                      
+                      // Also create publicFolders document
+                      try {
+                        const { doc, setDoc } = await import('firebase/firestore');
+                        const { db } = await import('./firebase');
+                        await setDoc(doc(db, 'publicFolders', shareId), {
+                          userId: user.uid,
+                          folderId: folderToShare.id,
+                          folderName: folderToShare.name,
+                          ownerName: user.displayName || 'Someone',
+                          createdAt: Date.now()
+                        });
+                      } catch (err) {
+                        console.error("Failed to create public folder index", err);
+                      }
+                      setFolderToShare(updatedFolder);
+                    }}
+                    className="w-full py-2.5 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors"
+                  >
+                    Create shareable link
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium text-slate-700">Shareable Link</label>
+                    <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center">
+                      <Globe size={10} className="mr-1" /> Public
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2 mb-4">
+                    <input
+                      type="text"
+                      readOnly
+                      value={`${window.location.origin}/#/share/${folderToShare.shareId}`}
+                      className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600 focus:outline-none"
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}/#/share/${folderToShare.shareId}`);
+                        alert('Link copied to clipboard!');
+                      }}
+                      className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors"
+                      title="Copy link"
+                    >
+                      <Copy size={18} />
+                    </button>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6 flex items-start">
+                    <AlertTriangle size={16} className="text-amber-500 mt-0.5 mr-2 flex-shrink-0" />
+                    <p className="text-xs text-amber-700">
+                      <strong>Warning:</strong> Anyone with this link can view this folder and all its subfolders and items.
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!user || !folderToShare.shareId) return;
+                      const shareId = folderToShare.shareId;
+                      const updatedFolder = { ...setPublicRecursive(folderToShare, false), shareId: undefined };
+                      handleUpdateFolder(updatedFolder);
+                      
+                      // Delete publicFolders document
+                      try {
+                        const { doc, deleteDoc } = await import('firebase/firestore');
+                        const { db } = await import('./firebase');
+                        await deleteDoc(doc(db, 'publicFolders', shareId));
+                      } catch (err) {
+                        console.error("Failed to delete public folder index", err);
+                      }
+                      setFolderToShare(updatedFolder);
+                    }}
+                    className="w-full py-2.5 bg-white border border-red-200 text-red-600 rounded-lg font-medium hover:bg-red-50 transition-colors"
+                  >
+                    Revoke access
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modals */}
       
