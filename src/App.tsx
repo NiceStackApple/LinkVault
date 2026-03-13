@@ -1804,7 +1804,7 @@ export default function App() {
                     {isProfileMenuOpen && (
                       <>
                         <div 
-                          className="fixed inset-0 z-[1999]" 
+                          className="fixed inset-0 z-[2009]" 
                           onClick={() => setIsProfileMenuOpen(false)}
                         />
                         <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-[2000] animate-in fade-in zoom-in-95 duration-100">
