@@ -29,12 +29,15 @@ import {
   AlignLeft,
   Scissors,
   ClipboardPaste,
-  Lock
+  Lock,
+  Clock,
+  Settings,
+  LogOut
 } from 'lucide-react';
 
 import { auth, googleProvider, db } from './firebase';
-import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { signInWithPopup, signOut, onAuthStateChanged, User, updateProfile, deleteUser } from 'firebase/auth';
+import { doc, setDoc, deleteDoc, collection, getDocs, query, where, writeBatch } from 'firebase/firestore';
 import { syncToFirestore, fetchFromFirestore } from './sync';
 import ShareView from './ShareView';
 
@@ -78,6 +81,22 @@ const generateId = () => {
     return crypto.randomUUID();
   }
   return Math.random().toString(36).substring(2, 15);
+};
+
+const formatTimeAgo = (timestamp: number): string => {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return 'Just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'Yesterday';
+  if (days < 30) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months > 1 ? 's' : ''} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years > 1 ? 's' : ''} ago`;
 };
 
 const detectLinkType = (url: string): LinkType => {
@@ -290,8 +309,9 @@ const LinkCard: React.FC<{
   isSelected?: boolean,
   onClick?: (e: React.MouseEvent) => void,
   onDoubleClick?: (e: React.MouseEvent) => void,
-  onOpenNote?: (l: LinkItem) => void
-}> = ({ link, onUpdate, onDelete, isSelected, onClick, onDoubleClick, onOpenNote }) => {
+  onOpenNote?: (l: LinkItem) => void,
+  onOpen?: (l: LinkItem) => void
+}> = ({ link, onUpdate, onDelete, isSelected, onClick, onDoubleClick, onOpenNote, onOpen }) => {
   const [copied, setCopied] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -352,10 +372,13 @@ const LinkCard: React.FC<{
   const handleDoubleClick = (e: React.MouseEvent) => {
     if (onDoubleClick) {
       onDoubleClick(e);
-    } else if (link.type === 'note' && onOpenNote) {
-      onOpenNote(link);
-    } else if (link.url) {
-      window.open(link.url, '_blank');
+    } else {
+      if (onOpen) onOpen(link);
+      if (link.type === 'note' && onOpenNote) {
+        onOpenNote(link);
+      } else if (link.url) {
+        window.open(link.url, '_blank');
+      }
     }
   };
 
@@ -727,6 +750,19 @@ export default function App() {
 
   const [user, setUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [loadingState, setLoadingState] = useState<'AUTH_LOADING' | 'DATA_LOADING' | 'READY'>('AUTH_LOADING');
+  const [showLoading, setShowLoading] = useState(true);
+  const [fadeLoading, setFadeLoading] = useState(false);
+
+  useEffect(() => {
+    if (loadingState === 'READY') {
+      setFadeLoading(true);
+      const timer = setTimeout(() => {
+        setShowLoading(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [loadingState]);
 
   const [rootFolder, setRootFolder] = useState<Folder>(() => {
     const saved = localStorage.getItem('linkvault_backup');
@@ -741,9 +777,12 @@ export default function App() {
   });
 
   useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
+        setLoadingState('DATA_LOADING');
         setIsSyncing(true);
         try {
           const remoteData = await fetchFromFirestore(currentUser.uid);
@@ -782,6 +821,7 @@ export default function App() {
           console.error("Error fetching from Firestore", error);
         } finally {
           setIsSyncing(false);
+          setLoadingState('READY');
         }
       } else {
         // Revert to local storage
@@ -793,18 +833,267 @@ export default function App() {
         } else {
           setRootFolder(INITIAL_STATE);
         }
+        setLoadingState('READY');
       }
     });
-    return () => unsubscribe();
+
+    timeoutId = setTimeout(() => {
+      setLoadingState('READY');
+    }, 10000);
+
+    return () => {
+      unsubscribe();
+      clearTimeout(timeoutId);
+    };
   }, []);
 
   const [currentFolderId, setCurrentFolderId] = useState<string>('root');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isDeleteAccountModalOpen, setIsDeleteAccountModalOpen] = useState(false);
+  const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const [displayNameInput, setDisplayNameInput] = useState('');
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [isFetchingStats, setIsFetchingStats] = useState(false);
+  const [usageStats, setUsageStats] = useState({ folders: 0, links: 0, notes: 0, shared: 0 });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sidebarSection, setSidebarSection] = useState<'folders' | 'recent' | 'starred' | 'shared'>('folders');
+  const [recents, setRecents] = useState<{ id: string, type: string, name: string, parentFolderId: string, openedAt: number }[]>([]);
+  const [language, setLanguage] = useState<'en' | 'id'>(() => {
+    return (localStorage.getItem('lvp_language') as 'en' | 'id') || 'en';
+  });
+
+  const t = (key: string): string => {
+    const translations: Record<'en' | 'id', Record<string, string>> = {
+      en: {
+        'Root': 'Root',
+        'Search': 'Search...',
+        'New Folder': 'New Folder',
+        'Add Link': 'Add Link',
+        'Add Note': 'Add Note',
+        'Export': 'Export',
+        'Import': 'Import',
+        'Folders': 'Folders',
+        'Recent': 'Recent',
+        'Starred': 'Starred',
+        'Shared': 'Shared',
+        'Settings': 'Settings',
+        'Sign Out': 'Sign Out',
+        'Save Changes': 'Save Changes',
+        'Delete Account': 'Delete Account',
+        'Cancel': 'Cancel',
+        'Confirm': 'Confirm',
+        'Sign In': 'Sign In'
+      },
+      id: {
+        'Root': 'Akar',
+        'Search': 'Cari...',
+        'New Folder': 'Folder Baru',
+        'Add Link': 'Tambah Tautan',
+        'Add Note': 'Tambah Catatan',
+        'Export': 'Ekspor',
+        'Import': 'Impor',
+        'Folders': 'Folder',
+        'Recent': 'Terbaru',
+        'Starred': 'Berbintang',
+        'Shared': 'Dibagikan',
+        'Settings': 'Pengaturan',
+        'Sign Out': 'Keluar',
+        'Save Changes': 'Simpan Perubahan',
+        'Delete Account': 'Hapus Akun',
+        'Cancel': 'Batal',
+        'Confirm': 'Konfirmasi',
+        'Sign In': 'Masuk'
+      }
+    };
+    return translations[language][key] || key;
+  };
+
+  useEffect(() => {
+    const key = user ? `lvp_recents_${user.uid}` : 'lvp_recents_anonymous';
+    const savedRecents = localStorage.getItem(key);
+    if (savedRecents) {
+      try {
+        setRecents(JSON.parse(savedRecents));
+      } catch (e) {}
+    } else {
+      setRecents([]);
+    }
+  }, [user]);
+
+  const recordRecent = (item: { id: string, type: string, name: string, parentFolderId: string }) => {
+    setRecents(prev => {
+      const filtered = prev.filter(r => r.id !== item.id);
+      const updated = [{ ...item, openedAt: Date.now() }, ...filtered].slice(0, 10);
+      const key = user ? `lvp_recents_${user.uid}` : 'lvp_recents_anonymous';
+      localStorage.setItem(key, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const handleOpenFolder = (folderId: string) => {
+    setCurrentFolderId(folderId);
+    const folder = findFolder(rootFolder, folderId);
+    if (folder && folderId !== 'root') {
+      const path = getBreadcrumbs(rootFolder, folderId);
+      const parent = path && path.length > 1 ? path[path.length - 2] : null;
+      recordRecent({
+        id: folder.id,
+        type: 'folder',
+        name: folder.name,
+        parentFolderId: parent ? parent.id : 'root'
+      });
+    }
+  };
+
+  const handleOpenLink = (link: LinkItem, parentFolderId: string) => {
+    recordRecent({
+      id: link.id,
+      type: link.type,
+      name: link.title,
+      parentFolderId
+    });
+  };
+
+  const renderStarredItems = () => {
+    const starredFolders: { folder: Folder, parentName: string }[] = [];
+    const starredLinks: { link: LinkItem, parentName: string, parentFolderId: string }[] = [];
+
+    const findStarred = (folder: Folder, parentName: string) => {
+      if (folder.starred && folder.id !== 'root') {
+        starredFolders.push({ folder, parentName });
+      }
+      for (const link of folder.links) {
+        if (link.starred) {
+          starredLinks.push({ link, parentName: folder.name, parentFolderId: folder.id });
+        }
+      }
+      for (const sub of folder.folders) {
+        findStarred(sub, folder.name);
+      }
+    };
+
+    findStarred(rootFolder, 'Root');
+
+    if (starredFolders.length === 0 && starredLinks.length === 0) {
+      return <div className="text-sm text-slate-500 text-center py-4">No starred items yet</div>;
+    }
+
+    return (
+      <>
+        {starredFolders.map(item => (
+          <div 
+            key={item.folder.id}
+            className="flex items-center py-2 px-2 rounded-md cursor-pointer hover:bg-slate-100/80 transition-colors"
+            onClick={() => { handleOpenFolder(item.folder.id); setIsSidebarOpen(false); }}
+          >
+            <div className="mr-3 flex-shrink-0 relative">
+              <FolderIcon size={16} className="text-slate-400" />
+              <Star size={8} className="text-yellow-400 absolute -top-1 -right-1 fill-yellow-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm text-slate-700 truncate font-medium">{item.folder.name}</div>
+              <div className="text-[10px] text-slate-400 truncate">in {item.parentName}</div>
+            </div>
+          </div>
+        ))}
+        {starredLinks.map(item => (
+          <div 
+            key={item.link.id}
+            className="flex items-center py-2 px-2 rounded-md cursor-pointer hover:bg-slate-100/80 transition-colors"
+            onClick={() => { 
+              handleOpenFolder(item.parentFolderId); 
+              setIsSidebarOpen(false); 
+              // Optional: highlight the link
+            }}
+          >
+            <div className="mr-3 flex-shrink-0 relative">
+              {item.link.type === 'note' ? <FileText size={16} className="text-emerald-500" /> :
+               item.link.type === 'youtube' ? <Youtube size={16} className="text-red-500" /> :
+               item.link.type === 'instagram' ? <Instagram size={16} className="text-pink-500" /> :
+               item.link.type === 'tiktok' ? <Video size={16} className="text-slate-800" /> :
+               <Globe size={16} className="text-blue-500" />}
+              <Star size={8} className="text-yellow-400 absolute -top-1 -right-1 fill-yellow-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm text-slate-700 truncate font-medium">{item.link.title}</div>
+              <div className="text-[10px] text-slate-400 truncate">in {item.parentName}</div>
+            </div>
+          </div>
+        ))}
+      </>
+    );
+  };
+
+  const renderSharedFolders = () => {
+    const sharedFolders: { folder: Folder, parentName: string }[] = [];
+
+    const findShared = (folder: Folder, parentName: string) => {
+      if (folder.isPublic && folder.id !== 'root') {
+        sharedFolders.push({ folder, parentName });
+      }
+      for (const sub of folder.folders) {
+        findShared(sub, folder.name);
+      }
+    };
+
+    findShared(rootFolder, 'Root');
+
+    if (sharedFolders.length === 0) {
+      return <div className="text-sm text-slate-500 text-center py-4">No shared folders yet</div>;
+    }
+
+    return (
+      <>
+        {sharedFolders.map(item => (
+          <div 
+            key={item.folder.id}
+            className="group flex items-center py-2 px-2 rounded-md cursor-pointer hover:bg-slate-100/80 transition-colors"
+            onClick={() => { handleOpenFolder(item.folder.id); setIsSidebarOpen(false); }}
+          >
+            <div className="mr-3 flex-shrink-0">
+              <Globe size={16} className="text-blue-500" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm text-slate-700 truncate font-medium">{item.folder.name}</div>
+              <div className="text-[10px] text-slate-400 truncate">in {item.parentName}</div>
+            </div>
+            <button
+              className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-all"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (item.folder.shareId) {
+                  const shareUrl = `${window.location.origin}/share/${item.folder.shareId}`;
+                  navigator.clipboard.writeText(shareUrl);
+                  // Optional: show toast
+                }
+              }}
+              title="Copy link"
+            >
+              <Copy size={14} />
+            </button>
+          </div>
+        ))}
+      </>
+    );
+  };
+
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [explicitBulkMode, setExplicitBulkMode] = useState(false);
   const isBulkMode = selectedItemIds.length >= 2 || explicitBulkMode;
+  
+  // Clear selection when changing folders or searching
+  useEffect(() => {
+    setSelectedItemIds([]);
+    setExplicitBulkMode(false);
+  }, [currentFolderId, searchQuery]);
   
   const [clipboard, setClipboard] = useState<{ ids: string[], action: 'copy' | 'cut' } | null>(null);
   
@@ -852,9 +1141,9 @@ export default function App() {
   const currentFolder = findFolder(rootFolder, currentFolderId) || rootFolder;
   const breadcrumbs = getBreadcrumbs(rootFolder, currentFolderId) || [rootFolder];
 
-  const searchVault = (root: Folder, query: string): { folders: Folder[], links: LinkItem[] } => {
+  const searchVault = (root: Folder, query: string): { folders: Folder[], links: { link: LinkItem, parentFolderId: string }[] } => {
     const lowerQuery = query.toLowerCase();
-    let results = { folders: [] as Folder[], links: [] as LinkItem[] };
+    let results = { folders: [] as Folder[], links: [] as { link: LinkItem, parentFolderId: string }[] };
 
     const searchRecursive = (folder: Folder) => {
       if (folder.name.toLowerCase().includes(lowerQuery) && folder.id !== 'root') {
@@ -862,7 +1151,7 @@ export default function App() {
       }
       for (const link of folder.links) {
         if (link.title.toLowerCase().includes(lowerQuery) || link.url.toLowerCase().includes(lowerQuery)) {
-          results.links.push(link);
+          results.links.push({ link, parentFolderId: folder.id });
         }
       }
       for (const sub of folder.folders) {
@@ -1103,18 +1392,171 @@ export default function App() {
           setRootFolder(importedData);
           setCurrentFolderId('root');
         } else {
-          alert("Invalid backup file format.");
+          showToast("Invalid backup file format.", 'error');
         }
       } catch (err) {
-        alert("Error parsing backup file.");
+        showToast("Error parsing backup file.", 'error');
       }
     };
     reader.readAsText(file);
     e.target.value = '';
   };
 
+  const fetchUsageStats = async () => {
+    if (!user) return;
+    setIsFetchingStats(true);
+    try {
+      const foldersRef = collection(db, `users/${user.uid}/folders`);
+      const itemsRef = collection(db, `users/${user.uid}/items`);
+      const [foldersSnap, itemsSnap] = await Promise.all([
+        getDocs(foldersRef),
+        getDocs(itemsRef)
+      ]);
+      
+      let foldersCount = foldersSnap.size;
+      let linksCount = 0;
+      let notesCount = 0;
+      let sharedCount = 0;
+
+      foldersSnap.forEach(doc => {
+        if (doc.data().isPublic) sharedCount++;
+      });
+
+      itemsSnap.forEach(doc => {
+        if (doc.data().type === 'note') notesCount++;
+        else linksCount++;
+      });
+
+      setUsageStats({ folders: foldersCount, links: linksCount, notes: notesCount, shared: sharedCount });
+    } catch (error) {
+      console.error("Error fetching stats:", error);
+    } finally {
+      setIsFetchingStats(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isSettingsModalOpen && user) {
+      setDisplayNameInput(user.displayName || '');
+      fetchUsageStats();
+    }
+  }, [isSettingsModalOpen, user]);
+
+  const handleSaveProfile = async () => {
+    if (!user) return;
+    try {
+      await updateProfile(user, { displayName: displayNameInput });
+      // Update local user state to reflect changes immediately
+      setUser({ ...user, displayName: displayNameInput } as User);
+      showToast('Profile updated successfully');
+    } catch (error) {
+      console.error("Error updating profile:", error);
+      showToast('Failed to update profile', 'error');
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!user) return;
+    setIsDeletingAccount(true);
+    try {
+      // 1. Delete all user's Firestore data
+      const foldersRef = collection(db, `users/${user.uid}/folders`);
+      const itemsRef = collection(db, `users/${user.uid}/items`);
+      const [foldersSnap, itemsSnap] = await Promise.all([
+        getDocs(foldersRef),
+        getDocs(itemsRef)
+      ]);
+
+      let batch = writeBatch(db);
+      let opCount = 0;
+
+      const commitBatch = async () => {
+        if (opCount > 0) {
+          await batch.commit();
+          batch = writeBatch(db);
+          opCount = 0;
+        }
+      };
+
+      for (const doc of foldersSnap.docs) {
+        batch.delete(doc.ref);
+        opCount++;
+        if (opCount >= 450) await commitBatch();
+      }
+
+      for (const doc of itemsSnap.docs) {
+        batch.delete(doc.ref);
+        opCount++;
+        if (opCount >= 450) await commitBatch();
+      }
+
+      // 2. Delete publicFolders
+      const publicFoldersRef = collection(db, 'publicFolders');
+      const q = query(publicFoldersRef, where('userId', '==', user.uid));
+      const publicFoldersSnap = await getDocs(q);
+      
+      for (const doc of publicFoldersSnap.docs) {
+        batch.delete(doc.ref);
+        opCount++;
+        if (opCount >= 450) await commitBatch();
+      }
+
+      await commitBatch();
+
+      // 3. Delete Auth account
+      await deleteUser(user);
+      
+      // 4. Sign out and redirect
+      await signOut(auth);
+      setRootFolder({ id: 'root', name: 'Root', folders: [], links: [] });
+      setIsSettingsModalOpen(false);
+      setIsDeletingAccount(false);
+    } catch (error) {
+      console.error("Error deleting account:", error);
+      showToast('Failed to delete account. You may need to sign in again to perform this action.', 'error');
+      setIsDeletingAccount(false);
+    }
+  };
+
+  const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newLang = e.target.value as 'en' | 'id';
+    setLanguage(newLang);
+    localStorage.setItem('lvp_language', newLang);
+  };
+
+  const handleSignIn = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Error signing in:", error);
+      showToast('Failed to sign in', 'error');
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      setRootFolder({ id: 'root', name: 'Root', folders: [], links: [] });
+      setCurrentFolderId('root');
+      showToast('Signed out successfully');
+    } catch (error) {
+      console.error("Error signing out:", error);
+      showToast('Failed to sign out', 'error');
+    }
+  };
+
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden selection:bg-slate-200 selection:text-slate-900">
+      {/* Loading Screen Overlay */}
+      {showLoading && (
+        <div 
+          className={`fixed inset-0 bg-slate-50 z-[100] flex flex-col items-center justify-center transition-opacity duration-500 ${fadeLoading ? 'opacity-0' : 'opacity-100'}`}
+        >
+          <h1 className="text-3xl font-bold tracking-tight text-black mb-8">LinkVault<span className="font-normal">Pro</span></h1>
+          <div className="loader"></div>
+        </div>
+      )}
+
       {/* Mobile Sidebar Overlay */}
       {isSidebarOpen && (
         <div 
@@ -1139,12 +1581,167 @@ export default function App() {
           </button>
         </div>
 
+        {/* Profile Section */}
+        <div className="relative border-b border-slate-200/60 bg-slate-50/30">
+          {user ? (
+            <div 
+              className="p-4 flex items-center space-x-3 cursor-pointer hover:bg-slate-100/50 transition-colors"
+              onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+            >
+              <img 
+                src={user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'User')}&background=random`} 
+                alt="Profile" 
+                className="w-10 h-10 rounded-full border border-slate-200"
+                referrerPolicy="no-referrer"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-900 truncate">{user.displayName || 'User'}</p>
+                <p className="text-xs text-slate-500 truncate">{user.email}</p>
+              </div>
+              <ChevronDown size={16} className="text-slate-400" />
+            </div>
+          ) : (
+            <div className="p-4 flex space-x-2">
+              <button 
+                onClick={handleSignIn}
+                className="flex-1 flex items-center justify-center space-x-2 py-2 px-4 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors"
+              >
+                <span>{t('Sign In')}</span>
+              </button>
+              <button 
+                onClick={() => setIsSettingsModalOpen(true)}
+                className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+                title={t('Settings')}
+              >
+                <Settings size={20} />
+              </button>
+            </div>
+          )}
+
+          {/* Profile Popup Menu */}
+          {isProfileMenuOpen && user && (
+            <>
+              <div 
+                className="fixed inset-0 z-[1999]" 
+                onClick={() => setIsProfileMenuOpen(false)}
+              />
+              <div className="absolute top-full left-4 right-4 mt-1 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-[2000]">
+                <button 
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 flex items-center"
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    setIsSettingsModalOpen(true);
+                  }}
+                >
+                  <Settings size={16} className="mr-2" />
+                  {t('Settings')}
+                </button>
+                <div className="h-px bg-slate-100 my-1"></div>
+                <button 
+                  className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center"
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    handleSignOut();
+                  }}
+                >
+                  <LogOut size={16} className="mr-2" />
+                  {t('Sign Out')}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Sidebar Navigation */}
+        <div className="flex items-center justify-around p-2 border-b border-slate-200/60 bg-slate-50/50">
+          <button 
+            onClick={() => setSidebarSection('folders')}
+            className={`p-2 rounded-lg flex flex-col items-center justify-center w-14 transition-colors ${sidebarSection === 'folders' ? 'bg-slate-200 text-slate-900' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+            title="My Folders"
+          >
+            <FolderIcon size={20} />
+            <span className="text-[10px] mt-1 font-medium">Folders</span>
+          </button>
+          <button 
+            onClick={() => setSidebarSection('recent')}
+            className={`p-2 rounded-lg flex flex-col items-center justify-center w-14 transition-colors ${sidebarSection === 'recent' ? 'bg-slate-200 text-slate-900' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+            title="Recent"
+          >
+            <Clock size={20} />
+            <span className="text-[10px] mt-1 font-medium">Recent</span>
+          </button>
+          <button 
+            onClick={() => setSidebarSection('starred')}
+            className={`p-2 rounded-lg flex flex-col items-center justify-center w-14 transition-colors ${sidebarSection === 'starred' ? 'bg-slate-200 text-slate-900' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+            title="Starred"
+          >
+            <Star size={20} />
+            <span className="text-[10px] mt-1 font-medium">Starred</span>
+          </button>
+          <button 
+            onClick={() => setSidebarSection('shared')}
+            className={`p-2 rounded-lg flex flex-col items-center justify-center w-14 transition-colors ${sidebarSection === 'shared' ? 'bg-slate-200 text-slate-900' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+            title="Shared"
+          >
+            <Globe size={20} />
+            <span className="text-[10px] mt-1 font-medium">Shared</span>
+          </button>
+        </div>
+
         <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-          <SidebarFolder 
-            folder={rootFolder} 
-            currentFolderId={currentFolderId} 
-            onSelect={(id) => { setCurrentFolderId(id); setIsSidebarOpen(false); }} 
-          />
+          {sidebarSection === 'folders' && (
+            <SidebarFolder 
+              folder={rootFolder} 
+              currentFolderId={currentFolderId} 
+              onSelect={(id) => { handleOpenFolder(id); setIsSidebarOpen(false); }} 
+            />
+          )}
+          {sidebarSection === 'recent' && (
+            <div className="space-y-1">
+              {recents.length === 0 ? (
+                <div className="text-sm text-slate-500 text-center py-4">No recent activity</div>
+              ) : (
+                recents.map(recent => (
+                  <div 
+                    key={recent.id + recent.openedAt}
+                    className="flex items-center py-2 px-2 rounded-md cursor-pointer hover:bg-slate-100/80 transition-colors"
+                    onClick={() => {
+                      if (recent.type === 'folder') {
+                        handleOpenFolder(recent.id);
+                      } else {
+                        handleOpenFolder(recent.parentFolderId);
+                        // Optional: highlight item
+                      }
+                      setIsSidebarOpen(false);
+                    }}
+                  >
+                    <div className="mr-3 flex-shrink-0">
+                      {recent.type === 'folder' ? <FolderIcon size={16} className="text-slate-400" /> : 
+                       recent.type === 'note' ? <FileText size={16} className="text-emerald-500" /> :
+                       recent.type === 'youtube' ? <Youtube size={16} className="text-red-500" /> :
+                       recent.type === 'instagram' ? <Instagram size={16} className="text-pink-500" /> :
+                       recent.type === 'tiktok' ? <Video size={16} className="text-slate-800" /> :
+                       <Globe size={16} className="text-blue-500" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm text-slate-700 truncate font-medium">{recent.name}</div>
+                      <div className="text-[10px] text-slate-400">{formatTimeAgo(recent.openedAt)}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          {sidebarSection === 'starred' && (
+            <div className="space-y-1">
+              {renderStarredItems()}
+            </div>
+          )}
+          {sidebarSection === 'shared' && (
+            <div className="space-y-1">
+              {renderSharedFolders()}
+            </div>
+          )}
         </div>
 
         {!user && (
@@ -1300,7 +1897,7 @@ export default function App() {
               <React.Fragment key={f.id}>
                 <span 
                   className={`cursor-pointer transition-colors font-medium ${i === breadcrumbs.length - 1 ? 'text-slate-800' : 'hover:text-black'}`}
-                  onClick={() => setCurrentFolderId(f.id)}
+                  onClick={() => handleOpenFolder(f.id)}
                 >
                   {f.name}
                 </span>
@@ -1328,7 +1925,15 @@ export default function App() {
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
+        <div 
+          className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar"
+          onClick={() => {
+            if (selectedItemIds.length > 0 || explicitBulkMode) {
+              setSelectedItemIds([]);
+              setExplicitBulkMode(false);
+            }
+          }}
+        >
           <div className="max-w-7xl mx-auto">
             
             {searchResults ? (
@@ -1346,7 +1951,7 @@ export default function App() {
                           key={folder.id}
                           folder={folder}
                           onDoubleClick={() => {
-                            setCurrentFolderId(folder.id);
+                            handleOpenFolder(folder.id);
                             setSearchQuery('');
                           }}
                           onClick={(e) => toggleItemSelection(folder.id, e)}
@@ -1365,15 +1970,16 @@ export default function App() {
                   <div>
                     <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Items</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                      {searchResults.links.map(link => (
+                      {searchResults.links.map(item => (
                         <LinkCard 
-                          key={link.id} 
-                          link={link} 
+                          key={item.link.id} 
+                          link={item.link} 
                           onUpdate={handleUpdateLink}
                           onDelete={handleDeleteLink}
-                          isSelected={selectedItemIds.includes(link.id)}
-                          onClick={(e) => toggleItemSelection(link.id, e)}
+                          isSelected={selectedItemIds.includes(item.link.id)}
+                          onClick={(e) => toggleItemSelection(item.link.id, e)}
                           onOpenNote={setViewNoteItem}
+                          onOpen={(link) => handleOpenLink(link, item.parentFolderId)}
                         />
                       ))}
                     </div>
@@ -1401,7 +2007,7 @@ export default function App() {
                         <FolderCard 
                           key={folder.id}
                           folder={folder}
-                          onDoubleClick={() => setCurrentFolderId(folder.id)}
+                          onDoubleClick={() => handleOpenFolder(folder.id)}
                           onClick={(e) => toggleItemSelection(folder.id, e)}
                           onUpdate={(updatedFolder) => handleUpdateFolder(updatedFolder)}
                           onDeleteRequest={(f) => setFolderToDelete(f)}
@@ -1428,6 +2034,7 @@ export default function App() {
                           isSelected={selectedItemIds.includes(link.id)}
                           onClick={(e) => toggleItemSelection(link.id, e)}
                           onOpenNote={setViewNoteItem}
+                          onOpen={(link) => handleOpenLink(link, currentFolderId)}
                         />
                       ))}
                     </div>
@@ -1531,7 +2138,7 @@ export default function App() {
                     <button
                       onClick={() => {
                         navigator.clipboard.writeText(`${window.location.origin}/#/share/${folderToShare.shareId}`);
-                        alert('Link copied to clipboard!');
+                        showToast('Link copied to clipboard!');
                       }}
                       className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors"
                       title="Copy link"
@@ -1873,6 +2480,210 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {isSettingsModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                <Settings size={20} className="mr-2 text-slate-500" />
+                Settings
+              </h3>
+              <button 
+                onClick={() => setIsSettingsModalOpen(false)} 
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md hover:bg-slate-100 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              {/* Profile Section */}
+              <div className="mb-8">
+                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Profile</h4>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Display Name</label>
+                    <div className="flex space-x-2">
+                      <input
+                        type="text"
+                        value={displayNameInput}
+                        onChange={(e) => setDisplayNameInput(e.target.value)}
+                        className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800"
+                        placeholder="Your name"
+                      />
+                      <button
+                        onClick={handleSaveProfile}
+                        disabled={!displayNameInput.trim() || displayNameInput === user?.displayName}
+                        className="px-4 py-2 text-sm font-medium text-white bg-slate-800 hover:bg-slate-900 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                    <input
+                      type="text"
+                      value={user?.email || ''}
+                      disabled
+                      className="w-full px-3 py-2 border border-slate-200 bg-slate-50 text-slate-500 rounded-lg cursor-not-allowed"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Preferences Section */}
+              <div className="mb-8">
+                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Preferences</h4>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Language</label>
+                  <select
+                    value={language}
+                    onChange={handleLanguageChange}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800 bg-white"
+                  >
+                    <option value="en">English</option>
+                    <option value="id">Bahasa Indonesia</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Usage Stats Section */}
+              <div className="mb-8">
+                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Usage Statistics</h4>
+                {isFetchingStats ? (
+                  <div className="flex justify-center py-4">
+                    <div className="loader border-t-slate-800 border-2 w-6 h-6"></div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                      <div className="text-2xl font-semibold text-slate-800">{usageStats.folders}</div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide mt-1">Folders</div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                      <div className="text-2xl font-semibold text-slate-800">{usageStats.links}</div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide mt-1">Links</div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                      <div className="text-2xl font-semibold text-slate-800">{usageStats.notes}</div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide mt-1">Notes</div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                      <div className="text-2xl font-semibold text-slate-800">{usageStats.shared}</div>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide mt-1">Shared Folders</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Danger Zone Section */}
+              <div>
+                <h4 className="text-sm font-semibold text-red-600 uppercase tracking-wider mb-4 border-b border-red-100 pb-2">Danger Zone</h4>
+                <div className="bg-red-50 border border-red-100 rounded-xl p-4">
+                  <h5 className="font-medium text-red-800 mb-1">Delete Account</h5>
+                  <p className="text-sm text-red-600/80 mb-4">
+                    Permanently delete your account and all associated data. This action cannot be undone.
+                  </p>
+                  <button
+                    onClick={() => setIsDeleteAccountModalOpen(true)}
+                    disabled={isDeletingAccount}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center"
+                  >
+                    {isDeletingAccount ? (
+                      <>
+                        <div className="loader border-t-white border-2 w-4 h-4 mr-2"></div>
+                        Deleting...
+                      </>
+                    ) : (
+                      'Delete Account'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Account Modal */}
+      {isDeleteAccountModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[10000] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-red-100 bg-red-50 flex justify-between items-center">
+              <div className="flex items-center text-red-600">
+                <AlertTriangle size={20} className="mr-2" />
+                <h3 className="text-lg font-semibold">Delete Account</h3>
+              </div>
+              <button 
+                onClick={() => setIsDeleteAccountModalOpen(false)} 
+                disabled={isDeletingAccount}
+                className="text-red-400 hover:text-red-600"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6">
+              <p className="text-sm text-slate-700 mb-4">
+                Are you absolutely sure you want to delete your account? This will permanently erase all your folders, links, and notes.
+              </p>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6">
+                <p className="text-sm text-red-800 font-medium">This action CANNOT be undone.</p>
+              </div>
+              
+              <div className="flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setIsDeleteAccountModalOpen(false)}
+                  disabled={isDeletingAccount}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteAccount}
+                  disabled={isDeletingAccount}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center"
+                >
+                  {isDeletingAccount ? (
+                    <>
+                      <div className="loader border-t-white border-2 w-4 h-4 mr-2"></div>
+                      Deleting...
+                    </>
+                  ) : (
+                    'Delete Permanently'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed bottom-4 right-4 z-[10000] animate-in slide-in-from-bottom-5 fade-in duration-300">
+          <div className={`px-4 py-3 rounded-xl shadow-lg border flex items-center space-x-3 ${
+            toast.type === 'error' 
+              ? 'bg-red-50 border-red-200 text-red-800' 
+              : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+          }`}>
+            {toast.type === 'error' ? <AlertTriangle size={18} /> : <Check size={18} />}
+            <p className="text-sm font-medium">{toast.message}</p>
+            <button 
+              onClick={() => setToast(null)}
+              className={`p-1 rounded-md transition-colors ${
+                toast.type === 'error' ? 'hover:bg-red-100' : 'hover:bg-emerald-100'
+              }`}
+            >
+              <X size={14} />
+            </button>
           </div>
         </div>
       )}
