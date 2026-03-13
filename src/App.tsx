@@ -32,8 +32,9 @@ import {
   Lock
 } from 'lucide-react';
 
-import { auth, googleProvider } from './firebase';
+import { auth, googleProvider, db } from './firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { syncToFirestore, fetchFromFirestore } from './sync';
 import ShareView from './ShareView';
 
@@ -1495,8 +1496,6 @@ export default function App() {
                       
                       // Also create publicFolders document
                       try {
-                        const { doc, setDoc } = await import('firebase/firestore');
-                        const { db } = await import('./firebase');
                         await setDoc(doc(db, 'publicFolders', shareId), {
                           userId: user.uid,
                           folderId: folderToShare.id,
@@ -1555,8 +1554,6 @@ export default function App() {
                       
                       // Delete publicFolders document
                       try {
-                        const { doc, deleteDoc } = await import('firebase/firestore');
-                        const { db } = await import('./firebase');
                         await deleteDoc(doc(db, 'publicFolders', shareId));
                       } catch (err) {
                         console.error("Failed to delete public folder index", err);

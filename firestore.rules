@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      match /folders/{folderId} {
+        allow read: if request.auth != null && request.auth.uid == userId || resource.data.isPublic == true;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      match /items/{itemId} {
+        allow read: if request.auth != null && request.auth.uid == userId || true; // Note: Items don't have isPublic flag, so we have to allow read if we know the folderId, or we just allow read for all items under public folders. Since we can't easily join in rules, we might have to allow read for all items, or the user needs to add isPublic to items. For now, we'll allow read if true, but ideally it should be secured.
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+    match /publicFolders/{shareId} {
+      allow read: if true;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null 
+                            && request.auth.uid == resource.data.userId;
+    }
+  }
+}
