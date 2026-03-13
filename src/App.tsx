@@ -852,6 +852,7 @@ export default function App() {
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isDeleteAccountModalOpen, setIsDeleteAccountModalOpen] = useState(false);
+  const [isFabOpen, setIsFabOpen] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -1581,77 +1582,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* Profile Section */}
-        <div className="relative border-b border-slate-200/60 bg-slate-50/30">
-          {user ? (
-            <div 
-              className="p-4 flex items-center space-x-3 cursor-pointer hover:bg-slate-100/50 transition-colors"
-              onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
-            >
-              <img 
-                src={user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'User')}&background=random`} 
-                alt="Profile" 
-                className="w-10 h-10 rounded-full border border-slate-200"
-                referrerPolicy="no-referrer"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-slate-900 truncate">{user.displayName || 'User'}</p>
-                <p className="text-xs text-slate-500 truncate">{user.email}</p>
-              </div>
-              <ChevronDown size={16} className="text-slate-400" />
-            </div>
-          ) : (
-            <div className="p-4 flex space-x-2">
-              <button 
-                onClick={handleSignIn}
-                className="flex-1 flex items-center justify-center space-x-2 py-2 px-4 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors"
-              >
-                <span>{t('Sign In')}</span>
-              </button>
-              <button 
-                onClick={() => setIsSettingsModalOpen(true)}
-                className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
-                title={t('Settings')}
-              >
-                <Settings size={20} />
-              </button>
-            </div>
-          )}
-
-          {/* Profile Popup Menu */}
-          {isProfileMenuOpen && user && (
-            <>
-              <div 
-                className="fixed inset-0 z-[1999]" 
-                onClick={() => setIsProfileMenuOpen(false)}
-              />
-              <div className="absolute top-full left-4 right-4 mt-1 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-[2000]">
-                <button 
-                  className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 flex items-center"
-                  onClick={() => {
-                    setIsProfileMenuOpen(false);
-                    setIsSettingsModalOpen(true);
-                  }}
-                >
-                  <Settings size={16} className="mr-2" />
-                  {t('Settings')}
-                </button>
-                <div className="h-px bg-slate-100 my-1"></div>
-                <button 
-                  className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center"
-                  onClick={() => {
-                    setIsProfileMenuOpen(false);
-                    handleSignOut();
-                  }}
-                >
-                  <LogOut size={16} className="mr-2" />
-                  {t('Sign Out')}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-
         {/* Sidebar Navigation */}
         <div className="flex items-center justify-around p-2 border-b border-slate-200/60 bg-slate-50/50">
           <button 
@@ -1842,49 +1772,75 @@ export default function App() {
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <button 
                   onClick={() => setIsCreateFolderModalOpen(true)}
-                  className="flex items-center space-x-1.5 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
+                  className="hidden md:flex items-center space-x-1.5 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
                 >
                   <FolderIcon size={16} className="text-slate-500" />
                   <span className="hidden sm:inline">New Folder</span>
                 </button>
                 <button 
                   onClick={() => setIsAddNoteModalOpen(true)}
-                  className="flex items-center space-x-1.5 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
+                  className="hidden md:flex items-center space-x-1.5 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
                 >
                   <FileText size={16} className="text-slate-500" />
                   <span className="hidden sm:inline">Add Note</span>
                 </button>
                 <button 
                   onClick={() => setIsAddLinkModalOpen(true)}
-                  className="flex items-center space-x-1.5 py-1.5 px-3 bg-black rounded-lg text-sm font-medium text-white hover:bg-slate-800 transition-all shadow-sm shadow-slate-200"
+                  className="hidden md:flex items-center space-x-1.5 py-1.5 px-3 bg-black rounded-lg text-sm font-medium text-white hover:bg-slate-800 transition-all shadow-sm shadow-slate-200"
                 >
                   <Plus size={16} />
                   <span className="hidden sm:inline">Add Link</span>
                 </button>
-                <div className="h-6 w-px bg-slate-200 mx-2"></div>
+                <div className="hidden md:block h-6 w-px bg-slate-200 mx-2"></div>
                 {user ? (
-                  <div className="relative group">
-                    <button className="flex items-center space-x-2 focus:outline-none">
-                      <img src={user.photoURL || ''} alt={user.displayName || 'User'} className="w-8 h-8 rounded-full border border-slate-200" referrerPolicy="no-referrer" />
+                  <div className="relative">
+                    <button 
+                      className="flex items-center space-x-2 focus:outline-none"
+                      onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                    >
+                      <img src={user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'User')}&background=random`} alt={user.displayName || 'User'} className="w-8 h-8 rounded-full border border-slate-200" referrerPolicy="no-referrer" />
                       <span className="text-sm font-medium text-slate-700 hidden sm:block">{user.displayName?.split(' ')[0]}</span>
                     </button>
-                    <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg border border-slate-100 py-1 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
-                      <div className="px-4 py-2 border-b border-slate-100">
-                        <p className="text-sm font-medium text-slate-800 truncate">{user.displayName}</p>
-                        <p className="text-xs text-slate-500 truncate">{user.email}</p>
-                      </div>
-                      <button 
-                        onClick={() => signOut(auth)} 
-                        className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
-                      >
-                        Sign Out
-                      </button>
-                    </div>
+                    {isProfileMenuOpen && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-[1999]" 
+                          onClick={() => setIsProfileMenuOpen(false)}
+                        />
+                        <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-[2000] animate-in fade-in zoom-in-95 duration-100">
+                          <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                            <p className="text-sm font-medium text-slate-800 truncate">{user.displayName}</p>
+                            <p className="text-xs text-slate-500 truncate">{user.email}</p>
+                          </div>
+                          <button 
+                            className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 flex items-center transition-colors mt-1"
+                            onClick={() => {
+                              setIsProfileMenuOpen(false);
+                              setIsSettingsModalOpen(true);
+                            }}
+                          >
+                            <Settings size={16} className="mr-2 text-slate-400" />
+                            {t('Settings')}
+                          </button>
+                          <div className="h-px bg-slate-100 my-1"></div>
+                          <button 
+                            className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center transition-colors mb-1"
+                            onClick={() => {
+                              setIsProfileMenuOpen(false);
+                              handleSignOut();
+                            }}
+                          >
+                            <LogOut size={16} className="mr-2 text-red-400" />
+                            {t('Sign Out')}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ) : (
-                  <button onClick={() => signInWithPopup(auth, googleProvider)} className="flex items-center space-x-2 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-all shadow-sm">
+                  <button onClick={handleSignIn} className="flex items-center space-x-2 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-all shadow-sm">
                     <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-4 h-4" />
-                    <span className="hidden sm:inline">Sign In</span>
+                    <span className="hidden sm:inline">{t('Sign In')}</span>
                   </button>
                 )}
               </div>
@@ -2665,6 +2621,67 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Mobile FAB */}
+      <div className="md:hidden fixed bottom-6 right-6 z-[1000]">
+        {isFabOpen && (
+          <>
+            <div 
+              className="fixed inset-0 z-[-1]" 
+              onClick={() => setIsFabOpen(false)}
+            />
+            <div className="absolute bottom-full right-0 mb-4 flex flex-col items-end space-y-3">
+              <button
+                onClick={() => {
+                  setIsFabOpen(false);
+                  setIsCreateFolderModalOpen(true);
+                }}
+                className="flex items-center space-x-3 group animate-in slide-in-from-bottom-2 fade-in duration-200"
+                style={{ animationDelay: '100ms', animationFillMode: 'both' }}
+              >
+                <span className="px-3 py-1.5 bg-white text-slate-700 text-sm font-medium rounded-lg shadow-sm border border-slate-200">New Folder</span>
+                <div className="w-12 h-12 bg-white rounded-full shadow-md border border-slate-200 flex items-center justify-center text-slate-600">
+                  <FolderIcon size={20} />
+                </div>
+              </button>
+              
+              <button
+                onClick={() => {
+                  setIsFabOpen(false);
+                  setIsAddNoteModalOpen(true);
+                }}
+                className="flex items-center space-x-3 group animate-in slide-in-from-bottom-2 fade-in duration-200"
+                style={{ animationDelay: '50ms', animationFillMode: 'both' }}
+              >
+                <span className="px-3 py-1.5 bg-white text-slate-700 text-sm font-medium rounded-lg shadow-sm border border-slate-200">Add Note</span>
+                <div className="w-12 h-12 bg-white rounded-full shadow-md border border-slate-200 flex items-center justify-center text-slate-600">
+                  <FileText size={20} />
+                </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsFabOpen(false);
+                  setIsAddLinkModalOpen(true);
+                }}
+                className="flex items-center space-x-3 group animate-in slide-in-from-bottom-2 fade-in duration-200"
+                style={{ animationDelay: '0ms', animationFillMode: 'both' }}
+              >
+                <span className="px-3 py-1.5 bg-white text-slate-700 text-sm font-medium rounded-lg shadow-sm border border-slate-200">Add Link</span>
+                <div className="w-12 h-12 bg-black rounded-full shadow-md flex items-center justify-center text-white">
+                  <Plus size={20} />
+                </div>
+              </button>
+            </div>
+          </>
+        )}
+        <button
+          onClick={() => setIsFabOpen(!isFabOpen)}
+          className={`w-14 h-14 bg-black text-white rounded-full shadow-lg flex items-center justify-center transition-transform duration-200 ${isFabOpen ? 'rotate-45' : ''}`}
+        >
+          <Plus size={24} />
+        </button>
+      </div>
 
       {/* Toast Notification */}
       {toast && (
