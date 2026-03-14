@@ -33,7 +33,8 @@ import {
   Lock,
   Clock,
   Settings,
-  LogOut
+  LogOut,
+  RefreshCw
 } from 'lucide-react';
 
 import { auth, googleProvider, db } from './firebase';
@@ -53,6 +54,7 @@ interface LinkItem {
   type: LinkType;
   dateAdded: number;
   starred?: boolean;
+  previewImage?: string | null;
 }
 
 interface Folder {
@@ -108,6 +110,54 @@ const detectLinkType = (url: string): LinkType => {
   if (lowerUrl.includes('instagram.com')) return 'instagram';
   return 'general';
 };
+
+async function fetchLinkPreview(url: string): Promise<string | null> {
+  try {
+    // Special case: YouTube (direct CDN, no need for allorigins)
+    const ytMatch = url.match(
+      /(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/
+    );
+    if (ytMatch) {
+      return `https://i.ytimg.com/vi/${ytMatch[1]}/hqdefault.jpg`;
+    }
+
+    // All other URLs: use allorigins to bypass CORS
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    
+    // Add timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    
+    const response = await fetch(proxyUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    
+    const data = await response.json();
+    
+    if (!data.contents) return null;
+
+    // Parse HTML to find og:image
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(data.contents, 'text/html');
+    
+    let ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute('content')
+      || doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content')
+      || null;
+
+    if (ogImage && !/^https?:\/\//i.test(ogImage)) {
+      try {
+        const origin = new URL(url).origin;
+        ogImage = new URL(ogImage, origin).href;
+      } catch (e) {
+        // Ignore invalid URLs
+      }
+    }
+
+    return ogImage || null;
+  } catch (error) {
+    console.warn('Preview fetch failed for:', url);
+    return null;
+  }
+}
 
 const updateFolder = (root: Folder, targetId: string, updater: (f: Folder) => Folder): Folder => {
   if (root.id === targetId) {
@@ -406,6 +456,13 @@ const LinkCard: React.FC<{
             <Icon />
           </div>
         </div>
+      ) : link.previewImage ? (
+        <div className="h-[140px] w-full bg-slate-100 relative overflow-hidden rounded-t-xl">
+          <img src={link.previewImage} alt={link.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          <div className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full shadow-sm">
+            <Icon />
+          </div>
+        </div>
       ) : (
         <div className="h-32 w-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center relative rounded-t-xl">
           {getFavicon(link.url) ? (
@@ -462,6 +519,22 @@ const LinkCard: React.FC<{
                       <Edit2 size={14} className="mr-2" />
                       Rename
                     </button>
+                    {link.type !== 'note' && (
+                      <button 
+                        className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center"
+                        onClick={async (e) => { 
+                          e.stopPropagation(); 
+                          setShowMenu(false);
+                          const newPreview = await fetchLinkPreview(link.url);
+                          if (newPreview !== undefined) {
+                            onUpdate({ ...link, previewImage: newPreview });
+                          }
+                        }}
+                      >
+                        <RefreshCw size={14} className="mr-2" />
+                        Refresh preview
+                      </button>
+                    )}
                     <div className="h-px bg-slate-100 my-1"></div>
                     <button 
                       className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
@@ -1176,13 +1249,15 @@ export default function App() {
     }
     
     const type = detectLinkType(url);
+    const linkId = generateId();
     
     const newLink: LinkItem = {
-      id: generateId(),
+      id: linkId,
       title: newLinkTitle.trim(),
       url,
       type,
-      dateAdded: Date.now()
+      dateAdded: Date.now(),
+      previewImage: null
     };
     
     setRootFolder(prev => updateFolder(prev, currentFolderId, f => ({
@@ -1193,6 +1268,32 @@ export default function App() {
     setNewLinkUrl('');
     setNewLinkTitle('');
     setIsAddLinkModalOpen(false);
+
+    // Fetch preview in background
+    fetchLinkPreview(url).then(previewImage => {
+      if (previewImage) {
+        setRootFolder(prev => {
+          let updated = false;
+          const updateLinkInFolder = (folder: Folder): Folder => {
+            const linkIndex = folder.links.findIndex(l => l.id === linkId);
+            if (linkIndex !== -1) {
+              updated = true;
+              const newLinks = [...folder.links];
+              newLinks[linkIndex] = { ...newLinks[linkIndex], previewImage };
+              return { ...folder, links: newLinks };
+            }
+            if (!updated) {
+              return {
+                ...folder,
+                folders: folder.folders.map(updateLinkInFolder)
+              };
+            }
+            return folder;
+          };
+          return updateLinkInFolder(prev);
+        });
+      }
+    });
   };
 
   const handleAddNote = (e: React.FormEvent) => {
@@ -1205,7 +1306,8 @@ export default function App() {
       url: '',
       content: newNoteContent,
       type: 'note',
-      dateAdded: Date.now()
+      dateAdded: Date.now(),
+      previewImage: null
     };
 
     setRootFolder(prev => updateFolder(prev, currentFolderId, f => ({

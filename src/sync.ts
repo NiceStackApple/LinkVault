@@ -9,6 +9,7 @@ export interface LinkItem {
   type: 'youtube' | 'tiktok' | 'instagram' | 'general' | 'note';
   dateAdded: number;
   starred?: boolean;
+  previewImage?: string | null;
 }
 
 export interface Folder {
@@ -48,7 +49,8 @@ export const flattenTree = (root: Folder, parentId: string | null = null): { fol
       content: link.content || '',
       folderId: root.id,
       createdAt: link.dateAdded,
-      starred: link.starred || false
+      starred: link.starred || false,
+      previewImage: link.previewImage || null
     });
   }
 
@@ -107,7 +109,8 @@ export const buildTree = (folders: any[], items: any[]): Folder => {
         content: item.content,
         type: item.type,
         dateAdded: item.createdAt,
-        starred: item.starred
+        starred: item.starred,
+        previewImage: item.previewImage || null
       });
     }
   }
