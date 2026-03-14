@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { faviconBase64 } from './faviconBase64';
 import { 
   Folder as FolderIcon, 
@@ -40,6 +41,7 @@ import { signInWithPopup, signOut, onAuthStateChanged, User, updateProfile, dele
 import { doc, setDoc, deleteDoc, collection, getDocs, query, where, writeBatch } from 'firebase/firestore';
 import { syncToFirestore, fetchFromFirestore } from './sync';
 import ShareView from './ShareView';
+import { motion, AnimatePresence } from 'motion/react';
 
 type LinkType = 'youtube' | 'tiktok' | 'instagram' | 'general' | 'note';
 
@@ -734,6 +736,28 @@ const setPublicRecursive = (folder: Folder, isPublic: boolean): Folder => {
   };
 };
 
+const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: (custom: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: {
+      delay: custom * 0.06,
+      ease: "easeInOut",
+      duration: 0.3
+    }
+  }),
+  exit: (custom: number) => ({
+    opacity: 0,
+    y: 20,
+    transition: {
+      delay: custom * 0.06,
+      ease: "easeInOut",
+      duration: 0.3
+    }
+  })
+};
+
 export default function App() {
   const [hash, setHash] = useState(window.location.hash);
 
@@ -867,55 +891,6 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarSection, setSidebarSection] = useState<'folders' | 'recent' | 'starred' | 'shared'>('folders');
   const [recents, setRecents] = useState<{ id: string, type: string, name: string, parentFolderId: string, openedAt: number }[]>([]);
-  const [language, setLanguage] = useState<'en' | 'id'>(() => {
-    return (localStorage.getItem('lvp_language') as 'en' | 'id') || 'en';
-  });
-
-  const t = (key: string): string => {
-    const translations: Record<'en' | 'id', Record<string, string>> = {
-      en: {
-        'Root': 'Root',
-        'Search': 'Search...',
-        'New Folder': 'New Folder',
-        'Add Link': 'Add Link',
-        'Add Note': 'Add Note',
-        'Export': 'Export',
-        'Import': 'Import',
-        'Folders': 'Folders',
-        'Recent': 'Recent',
-        'Starred': 'Starred',
-        'Shared': 'Shared',
-        'Settings': 'Settings',
-        'Sign Out': 'Sign Out',
-        'Save Changes': 'Save Changes',
-        'Delete Account': 'Delete Account',
-        'Cancel': 'Cancel',
-        'Confirm': 'Confirm',
-        'Sign In': 'Sign In'
-      },
-      id: {
-        'Root': 'Akar',
-        'Search': 'Cari...',
-        'New Folder': 'Folder Baru',
-        'Add Link': 'Tambah Tautan',
-        'Add Note': 'Tambah Catatan',
-        'Export': 'Ekspor',
-        'Import': 'Impor',
-        'Folders': 'Folder',
-        'Recent': 'Terbaru',
-        'Starred': 'Berbintang',
-        'Shared': 'Dibagikan',
-        'Settings': 'Pengaturan',
-        'Sign Out': 'Keluar',
-        'Save Changes': 'Simpan Perubahan',
-        'Delete Account': 'Hapus Akun',
-        'Cancel': 'Batal',
-        'Confirm': 'Konfirmasi',
-        'Sign In': 'Masuk'
-      }
-    };
-    return translations[language][key] || key;
-  };
 
   useEffect(() => {
     const key = user ? `lvp_recents_${user.uid}` : 'lvp_recents_anonymous';
@@ -1519,12 +1494,6 @@ export default function App() {
     }
   };
 
-  const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newLang = e.target.value as 'en' | 'id';
-    setLanguage(newLang);
-    localStorage.setItem('lvp_language', newLang);
-  };
-
   const handleSignIn = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
@@ -1561,14 +1530,14 @@ export default function App() {
       {/* Mobile Sidebar Overlay */}
       {isSidebarOpen && (
         <div 
-          className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-20 lg:hidden"
+          className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-[99] lg:hidden"
           onClick={() => setIsSidebarOpen(false)}
         />
       )}
 
       {/* Sidebar */}
       <aside className={`
-        fixed lg:static inset-y-0 left-0 z-30 w-72 bg-white/80 backdrop-blur-xl border-r border-slate-200/60 
+        fixed lg:static inset-y-0 left-0 z-[100] w-72 bg-white/80 backdrop-blur-xl border-r border-slate-200/60 
         flex flex-col transition-transform duration-300 ease-in-out
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
@@ -1704,9 +1673,9 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100/50">
+      <main className="flex-1 flex flex-col h-full overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100/50 relative z-[1]">
         {/* Header Area */}
-        <div className="sticky top-0 z-10 flex flex-col shadow-sm">
+        <div className="sticky top-0 z-[60] flex flex-col shadow-sm">
           {selectedItemIds.length > 0 ? (
             <header className="h-16 bg-slate-100/90 backdrop-blur-md border-b border-slate-200 flex items-center px-4 sm:px-8 justify-between gap-4">
               <div className="flex items-center">
@@ -1801,13 +1770,13 @@ export default function App() {
                       <img src={user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'User')}&background=random`} alt={user.displayName || 'User'} className="w-8 h-8 rounded-full border border-slate-200" referrerPolicy="no-referrer" />
                       <span className="text-sm font-medium text-slate-700 hidden sm:block">{user.displayName?.split(' ')[0]}</span>
                     </button>
-                    {isProfileMenuOpen && (
+                    {isProfileMenuOpen && createPortal(
                       <>
                         <div 
-                          className="fixed inset-0 z-[2009]" 
+                          className="fixed inset-0 z-[9999]" 
                           onClick={() => setIsProfileMenuOpen(false)}
                         />
-                        <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-[2000] animate-in fade-in zoom-in-95 duration-100">
+                        <div className="fixed right-4 sm:right-8 top-[72px] w-48 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-[9999] animate-in fade-in zoom-in-95 duration-100">
                           <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
                             <p className="text-sm font-medium text-slate-800 truncate">{user.displayName}</p>
                             <p className="text-xs text-slate-500 truncate">{user.email}</p>
@@ -1820,7 +1789,7 @@ export default function App() {
                             }}
                           >
                             <Settings size={16} className="mr-2 text-slate-400" />
-                            {t('Settings')}
+                            Settings
                           </button>
                           <div className="h-px bg-slate-100 my-1"></div>
                           <button 
@@ -1831,16 +1800,17 @@ export default function App() {
                             }}
                           >
                             <LogOut size={16} className="mr-2 text-red-400" />
-                            {t('Sign Out')}
+                            Sign Out
                           </button>
                         </div>
-                      </>
+                      </>,
+                      document.body
                     )}
                   </div>
                 ) : (
                   <button onClick={handleSignIn} className="flex items-center space-x-2 py-1.5 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-all shadow-sm">
                     <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-4 h-4" />
-                    <span className="hidden sm:inline">{t('Sign In')}</span>
+                    <span className="hidden sm:inline">Sign In</span>
                   </button>
                 )}
               </div>
@@ -2443,7 +2413,7 @@ export default function App() {
       {/* Settings Modal */}
       {isSettingsModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col relative z-[10000]">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
                 <Settings size={20} className="mr-2 text-slate-500" />
@@ -2493,19 +2463,83 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Preferences Section */}
+              {/* Contact & Community Section */}
               <div className="mb-8">
-                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Preferences</h4>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Language</label>
-                  <select
-                    value={language}
-                    onChange={handleLanguageChange}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-800 focus:border-slate-800 bg-white"
-                  >
-                    <option value="en">English</option>
-                    <option value="id">Bahasa Indonesia</option>
-                  </select>
+                <h4 className="text-sm font-semibold text-slate-900 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Contact & Community</h4>
+                
+                <div className="space-y-6">
+                  {/* Community */}
+                  <div>
+                    <h5 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Community</h5>
+                    <a 
+                      href="https://discord.gg/s3q8Fa7gkM" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-between w-full p-3 border border-slate-200 rounded-xl hover:bg-[#5865F2]/5 transition-colors group"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <div className="w-10 h-10 rounded-lg bg-[#5865F2]/10 flex items-center justify-center text-[#5865F2]">
+                          <span className="text-xl">🎮</span>
+                        </div>
+                        <div className="text-left">
+                          <p className="text-sm font-medium text-slate-800 group-hover:text-[#5865F2] transition-colors">Join our Discord</p>
+                          <p className="text-xs text-slate-500">Share feedback, suggestions, or just say hi</p>
+                        </div>
+                      </div>
+                      <div className="text-slate-400 group-hover:text-[#5865F2] transition-colors flex items-center space-x-1">
+                        <span className="text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity">Open</span>
+                        <ExternalLink size={14} />
+                      </div>
+                    </a>
+                  </div>
+
+                  {/* Follow Us */}
+                  <div>
+                    <h5 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Follow Us</h5>
+                    <div className="space-y-3">
+                      <a 
+                        href="https://www.instagram.com/aktprojects_/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-between w-full p-3 border border-slate-200 rounded-xl hover:bg-pink-50 transition-colors group"
+                      >
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-[#fd5949] to-[#d6249f] flex items-center justify-center text-white">
+                            <Instagram size={20} />
+                          </div>
+                          <div className="text-left">
+                            <p className="text-sm font-medium text-slate-800 group-hover:text-[#d6249f] transition-colors">@aktprojects_</p>
+                            <p className="text-xs text-slate-500">Project Updates</p>
+                          </div>
+                        </div>
+                        <div className="text-slate-400 group-hover:text-[#d6249f] transition-colors flex items-center space-x-1">
+                          <span className="text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity">Open</span>
+                          <ExternalLink size={14} />
+                        </div>
+                      </a>
+
+                      <a 
+                        href="https://www.instagram.com/tsaqifnico_/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-between w-full p-3 border border-slate-200 rounded-xl hover:bg-pink-50 transition-colors group"
+                      >
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-[#fd5949] to-[#d6249f] flex items-center justify-center text-white">
+                            <Instagram size={20} />
+                          </div>
+                          <div className="text-left">
+                            <p className="text-sm font-medium text-slate-800 group-hover:text-[#d6249f] transition-colors">@tsaqifnico_</p>
+                            <p className="text-xs text-slate-500">Developer</p>
+                          </div>
+                        </div>
+                        <div className="text-slate-400 group-hover:text-[#d6249f] transition-colors flex items-center space-x-1">
+                          <span className="text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity">Open</span>
+                          <ExternalLink size={14} />
+                        </div>
+                      </a>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -2624,68 +2658,92 @@ export default function App() {
 
       {/* Mobile FAB */}
       <div className="md:hidden fixed bottom-6 right-6 z-[1000]">
-        {isFabOpen && (
-          <>
-            <div 
-              className="fixed inset-0 z-[-1]" 
-              onClick={() => setIsFabOpen(false)}
-            />
-            <div className="absolute bottom-full right-0 mb-4 flex flex-col items-end space-y-3">
-              <button
-                onClick={() => {
-                  setIsFabOpen(false);
-                  setIsCreateFolderModalOpen(true);
-                }}
-                className="flex items-center space-x-3 group animate-in slide-in-from-bottom-2 fade-in duration-200"
-                style={{ animationDelay: '100ms', animationFillMode: 'both' }}
-              >
-                <span className="px-3 py-1.5 bg-white text-slate-700 text-sm font-medium rounded-lg shadow-sm border border-slate-200">New Folder</span>
-                <div className="w-12 h-12 bg-white rounded-full shadow-md border border-slate-200 flex items-center justify-center text-slate-600">
-                  <FolderIcon size={20} />
-                </div>
-              </button>
-              
-              <button
-                onClick={() => {
-                  setIsFabOpen(false);
-                  setIsAddNoteModalOpen(true);
-                }}
-                className="flex items-center space-x-3 group animate-in slide-in-from-bottom-2 fade-in duration-200"
-                style={{ animationDelay: '50ms', animationFillMode: 'both' }}
-              >
-                <span className="px-3 py-1.5 bg-white text-slate-700 text-sm font-medium rounded-lg shadow-sm border border-slate-200">Add Note</span>
-                <div className="w-12 h-12 bg-white rounded-full shadow-md border border-slate-200 flex items-center justify-center text-slate-600">
-                  <FileText size={20} />
-                </div>
-              </button>
+        <AnimatePresence>
+          {isFabOpen && (
+            <>
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-[-1]" 
+                onClick={() => setIsFabOpen(false)}
+              />
+              <div className="absolute bottom-full right-0 mb-4 flex flex-col items-end space-y-3">
+                <motion.button
+                  custom={2}
+                  initial="hidden"
+                  animate="visible"
+                  exit="exit"
+                  variants={itemVariants}
+                  onClick={() => {
+                    setIsFabOpen(false);
+                    setIsCreateFolderModalOpen(true);
+                  }}
+                  className="flex items-center space-x-3 group"
+                >
+                  <span className="bg-white px-3 py-1.5 rounded-full shadow-sm text-slate-800 text-[13px] font-medium border border-slate-100">New Folder</span>
+                  <div className="w-10 h-10 bg-white rounded-xl shadow-sm border border-slate-100 flex items-center justify-center text-slate-800">
+                    <FolderIcon size={18} />
+                  </div>
+                </motion.button>
+                
+                <motion.button
+                  custom={1}
+                  initial="hidden"
+                  animate="visible"
+                  exit="exit"
+                  variants={itemVariants}
+                  onClick={() => {
+                    setIsFabOpen(false);
+                    setIsAddNoteModalOpen(true);
+                  }}
+                  className="flex items-center space-x-3 group"
+                >
+                  <span className="bg-white px-3 py-1.5 rounded-full shadow-sm text-slate-800 text-[13px] font-medium border border-slate-100">Add Note</span>
+                  <div className="w-10 h-10 bg-white rounded-xl shadow-sm border border-slate-100 flex items-center justify-center text-slate-800">
+                    <FileText size={18} />
+                  </div>
+                </motion.button>
 
-              <button
-                onClick={() => {
-                  setIsFabOpen(false);
-                  setIsAddLinkModalOpen(true);
-                }}
-                className="flex items-center space-x-3 group animate-in slide-in-from-bottom-2 fade-in duration-200"
-                style={{ animationDelay: '0ms', animationFillMode: 'both' }}
-              >
-                <span className="px-3 py-1.5 bg-white text-slate-700 text-sm font-medium rounded-lg shadow-sm border border-slate-200">Add Link</span>
-                <div className="w-12 h-12 bg-black rounded-full shadow-md flex items-center justify-center text-white">
-                  <Plus size={20} />
-                </div>
-              </button>
-            </div>
-          </>
-        )}
+                <motion.button
+                  custom={0}
+                  initial="hidden"
+                  animate="visible"
+                  exit="exit"
+                  variants={itemVariants}
+                  onClick={() => {
+                    setIsFabOpen(false);
+                    setIsAddLinkModalOpen(true);
+                  }}
+                  className="flex items-center space-x-3 group"
+                >
+                  <span className="bg-white px-3 py-1.5 rounded-full shadow-sm text-slate-800 text-[13px] font-medium border border-slate-100">Add Link</span>
+                  <div className="w-10 h-10 bg-white rounded-xl shadow-sm border border-slate-100 flex items-center justify-center text-slate-800">
+                    <LinkIcon size={18} />
+                  </div>
+                </motion.button>
+              </div>
+            </>
+          )}
+        </AnimatePresence>
+        
         <button
           onClick={() => setIsFabOpen(!isFabOpen)}
-          className={`w-14 h-14 bg-black text-white rounded-full shadow-lg flex items-center justify-center transition-transform duration-200 ${isFabOpen ? 'rotate-45' : ''}`}
+          className="w-[120px] h-12 bg-black text-white rounded-xl shadow-lg flex items-center justify-center space-x-2 transition-colors duration-200"
         >
-          <Plus size={24} />
+          <motion.div
+            animate={{ rotate: isFabOpen ? 45 : 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+          >
+            <Plus size={20} />
+          </motion.div>
+          <span className="text-[15px] font-medium">Add</span>
         </button>
       </div>
 
       {/* Toast Notification */}
       {toast && (
-        <div className="fixed bottom-4 right-4 z-[10000] animate-in slide-in-from-bottom-5 fade-in duration-300">
+        <div className="fixed bottom-4 right-4 z-[10001] animate-in slide-in-from-bottom-5 fade-in duration-300">
           <div className={`px-4 py-3 rounded-xl shadow-lg border flex items-center space-x-3 ${
             toast.type === 'error' 
               ? 'bg-red-50 border-red-200 text-red-800' 
