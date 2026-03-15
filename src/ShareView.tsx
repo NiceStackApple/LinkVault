@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { doc, getDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import { Folder, buildTree } from './sync';
-import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X } from 'lucide-react';
+import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X, Check, Copy } from 'lucide-react';
 
 const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> = ({ link, onOpenNote }) => {
   return (
@@ -71,6 +71,7 @@ export default function ShareView({ shareId }: { shareId: string }) {
   const [currentFolderId, setCurrentFolderId] = useState<string>('');
   const [ownerName, setOwnerName] = useState<string>('Someone');
   const [viewNoteItem, setViewNoteItem] = useState<any | null>(null);
+  const [noteCopied, setNoteCopied] = useState(false);
 
   useEffect(() => {
     const fetchSharedFolder = async () => {
@@ -305,6 +306,19 @@ export default function ShareView({ shareId }: { shareId: string }) {
               <div className="prose prose-slate max-w-none">
                 <p className="whitespace-pre-wrap text-slate-700 leading-relaxed">{viewNoteItem.content}</p>
               </div>
+            </div>
+            <div className="p-4 sm:p-6 border-t border-slate-100 bg-slate-50 flex justify-end">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(viewNoteItem.content || '');
+                  setNoteCopied(true);
+                  setTimeout(() => setNoteCopied(false), 1500);
+                }}
+                className="px-4 py-2 text-sm font-medium text-black bg-white border border-black rounded-lg hover:bg-black hover:text-white transition-colors flex items-center"
+              >
+                {noteCopied ? <Check size={16} className="mr-2" /> : <Copy size={16} className="mr-2" />}
+                {noteCopied ? 'Copied!' : 'Copy'}
+              </button>
             </div>
           </div>
         </div>

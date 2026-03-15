@@ -605,8 +605,8 @@ const LinkCard: React.FC<{
                 onClick={(e) => { e.stopPropagation(); if (onOpenNote) onOpenNote(link); }}
                 className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-emerald-600 bg-emerald-50 hover:bg-emerald-100"
               >
-                <Edit2 size={12} />
-                <span>Edit</span>
+                <FileText size={12} />
+                <span>View</span>
               </button>
             ) : (
               <a 
@@ -1156,6 +1156,9 @@ export default function App() {
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [folderToShare, setFolderToShare] = useState<Folder | null>(null);
   const [viewNoteItem, setViewNoteItem] = useState<LinkItem | null>(null);
+  const [isEditingNote, setIsEditingNote] = useState(false);
+  const [editNoteContent, setEditNoteContent] = useState('');
+  const [noteCopied, setNoteCopied] = useState(false);
   
   // Form states
   const [newFolderName, setNewFolderName] = useState('');
@@ -1323,6 +1326,7 @@ export default function App() {
   const handleUpdateNoteContent = (id: string, newContent: string) => {
     setRootFolder(prev => updateLinkInTree(prev, { ...viewNoteItem!, content: newContent }));
     setViewNoteItem(prev => prev ? { ...prev, content: newContent } : null);
+    setIsEditingNote(false);
   };
 
   const handleDeleteFolder = (id: string) => {
@@ -2271,28 +2275,80 @@ export default function App() {
                 <FileText size={20} className="mr-2" />
                 <h3 className="text-lg font-semibold">{viewNoteItem.title}</h3>
               </div>
-              <button onClick={() => setViewNoteItem(null)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => { setViewNoteItem(null); setIsEditingNote(false); }} className="text-slate-400 hover:text-slate-600">
                 <X size={20} />
               </button>
             </div>
             <div className="p-6 overflow-y-auto flex-1">
-              <textarea
-                value={viewNoteItem.content || ''}
-                onChange={(e) => handleUpdateNoteContent(viewNoteItem.id, e.target.value)}
-                className="w-full h-full min-h-[300px] p-0 border-0 focus:ring-0 resize-none text-slate-700 leading-relaxed bg-transparent"
-                placeholder="Write your note here..."
-              />
+              {isEditingNote ? (
+                <textarea
+                  value={editNoteContent}
+                  onChange={(e) => {
+                    setEditNoteContent(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = `${e.target.scrollHeight}px`;
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.height = 'auto';
+                    e.target.style.height = `${e.target.scrollHeight}px`;
+                  }}
+                  className="w-full min-h-[300px] p-3 border-2 border-black rounded-lg focus:outline-none focus:ring-2 focus:ring-black focus:border-black resize-none text-slate-700 leading-relaxed bg-white overflow-hidden"
+                  placeholder="Write your note here..."
+                  autoFocus
+                />
+              ) : (
+                <div className="prose prose-slate max-w-none min-h-[300px]">
+                  <p className="whitespace-pre-wrap text-slate-700 leading-relaxed">{viewNoteItem.content || 'Empty note...'}</p>
+                </div>
+              )}
             </div>
             <div className="px-6 py-4 border-t border-slate-100 flex justify-between items-center bg-slate-50">
               <span className="text-xs text-slate-400">
                 Last edited: {new Date(viewNoteItem.dateAdded).toLocaleString()}
               </span>
-              <button
-                onClick={() => setViewNoteItem(null)}
-                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors"
-              >
-                Done
-              </button>
+              <div className="flex space-x-3">
+                {isEditingNote ? (
+                  <>
+                    <button
+                      onClick={() => setIsEditingNote(false)}
+                      className="px-4 py-2 text-sm font-medium text-black bg-white border border-black rounded-lg hover:bg-black hover:text-white transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleUpdateNoteContent(viewNoteItem.id, editNoteContent)}
+                      className="px-4 py-2 text-sm font-medium text-black bg-white border border-black rounded-lg hover:bg-black hover:text-white transition-colors flex items-center"
+                    >
+                      <Check size={16} className="mr-2" />
+                      Save
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(viewNoteItem.content || '');
+                        setNoteCopied(true);
+                        setTimeout(() => setNoteCopied(false), 1500);
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-black bg-white border border-black rounded-lg hover:bg-black hover:text-white transition-colors flex items-center"
+                    >
+                      {noteCopied ? <Check size={16} className="mr-2" /> : <Copy size={16} className="mr-2" />}
+                      {noteCopied ? 'Copied!' : 'Copy'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditNoteContent(viewNoteItem.content || '');
+                        setIsEditingNote(true);
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-black bg-white border border-black rounded-lg hover:bg-black hover:text-white transition-colors flex items-center"
+                    >
+                      <Edit2 size={16} className="mr-2" />
+                      Edit
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
