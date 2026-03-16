@@ -2140,6 +2140,7 @@ export default function App() {
                           folderId: folderToShare.id,
                           folderName: folderToShare.name,
                           ownerName: user.displayName || 'Someone',
+                          ownerPhotoUrl: user.photoURL || null,
                           createdAt: Date.now()
                         });
                       } catch (err) {
@@ -2317,7 +2318,7 @@ export default function App() {
                     </button>
                     <button
                       onClick={() => handleUpdateNoteContent(viewNoteItem.id, editNoteContent)}
-                      className="px-4 py-2 text-sm font-medium text-black bg-white border border-black rounded-lg hover:bg-black hover:text-white transition-colors flex items-center"
+                      className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors flex items-center"
                     >
                       <Check size={16} className="mr-2" />
                       Save
@@ -2341,7 +2342,7 @@ export default function App() {
                         setEditNoteContent(viewNoteItem.content || '');
                         setIsEditingNote(true);
                       }}
-                      className="px-4 py-2 text-sm font-medium text-black bg-white border border-black rounded-lg hover:bg-black hover:text-white transition-colors flex items-center"
+                      className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors flex items-center"
                     >
                       <Edit2 size={16} className="mr-2" />
                       Edit

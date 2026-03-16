@@ -1,43 +1,69 @@
 import React, { useState, useEffect } from 'react';
-import { db } from './firebase';
-import { doc, getDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { auth, db } from './firebase';
+import { doc, getDoc, collection, getDocs, query, where, setDoc } from 'firebase/firestore';
+import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { Folder, buildTree } from './sync';
-import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X, Check, Copy } from 'lucide-react';
+import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X, Check, Copy, ArrowUp, Link as LinkIcon } from 'lucide-react';
 
 const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> = ({ link, onOpenNote }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(link.type === 'note' ? (link.content || '') : (link.url || ''));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-start justify-between mb-2">
-        <h3 className="font-medium text-slate-800 line-clamp-2" title={link.title}>{link.title}</h3>
-      </div>
-      {link.type === 'note' ? (
-        <p className="text-sm text-slate-500 line-clamp-2 mb-3">{link.content}</p>
-      ) : (
-        <p className="text-sm text-slate-500 truncate mb-3" title={link.url}>{link.url}</p>
+    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow flex flex-col">
+      {link.previewImage && (
+        <div className="h-32 w-full bg-slate-100 border-b border-slate-100 overflow-hidden">
+          <img src={link.previewImage} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+        </div>
       )}
-      <div className="flex items-center justify-between mt-auto">
-        <span className="text-xs font-medium px-2 py-1 bg-slate-100 text-slate-600 rounded-md capitalize">
-          {link.type}
-        </span>
+      <div className="p-4 flex flex-col flex-1">
+        <div className="flex items-start justify-between mb-2">
+          <h3 className="font-medium text-slate-800 line-clamp-2" title={link.title}>{link.title}</h3>
+        </div>
         {link.type === 'note' ? (
-          <button 
-            onClick={() => onOpenNote(link)}
-            className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-emerald-600 bg-emerald-50 hover:bg-emerald-100"
-          >
-            <FileText size={12} />
-            <span>Read</span>
-          </button>
+          <p className="text-sm text-slate-500 line-clamp-2 mb-3">{link.content}</p>
         ) : (
-          <a 
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-slate-800 bg-slate-100 hover:bg-slate-200"
-          >
-            <ExternalLink size={12} />
-            <span>Open</span>
-          </a>
+          <p className="text-sm text-slate-500 truncate mb-3" title={link.url}>{link.url}</p>
         )}
+        <div className="flex items-center justify-between mt-auto pt-2">
+          <span className="text-xs font-medium px-2 py-1 bg-slate-100 text-slate-600 rounded-md capitalize">
+            {link.type}
+          </span>
+          <div className="flex space-x-2">
+            <button 
+              onClick={handleCopy}
+              className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-black bg-white border border-black hover:bg-black hover:text-white"
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              <span>{copied ? 'Copied!' : 'Copy'}</span>
+            </button>
+            {link.type === 'note' ? (
+              <button 
+                onClick={() => onOpenNote(link)}
+                className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-emerald-600 bg-emerald-50 hover:bg-emerald-100"
+              >
+                <FileText size={12} />
+                <span>Read</span>
+              </button>
+            ) : (
+              <a 
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-slate-800 bg-slate-100 hover:bg-slate-200"
+              >
+                <ExternalLink size={12} />
+                <span>Open</span>
+              </a>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -64,14 +90,34 @@ const SharedFolderCard: React.FC<{ folder: Folder, onDoubleClick: () => void }> 
   );
 };
 
+const UpFolderCard: React.FC<{ onClick: () => void, parentName: string }> = ({ onClick, parentName }) => {
+  return (
+    <div 
+      className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl p-4 hover:bg-slate-100 hover:border-slate-300 transition-all flex items-center cursor-pointer"
+      onClick={onClick}
+    >
+      <div className="w-10 h-10 rounded-lg flex items-center justify-center mr-3 flex-shrink-0 bg-slate-200/50 text-slate-500">
+        <ArrowUp size={20} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <h3 className="font-medium text-slate-600 truncate">..</h3>
+        <p className="text-xs text-slate-400 mt-0.5">Go up to {parentName}</p>
+      </div>
+    </div>
+  );
+};
+
 export default function ShareView({ shareId }: { shareId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rootFolder, setRootFolder] = useState<Folder | null>(null);
   const [currentFolderId, setCurrentFolderId] = useState<string>('');
   const [ownerName, setOwnerName] = useState<string>('Someone');
+  const [ownerPhotoUrl, setOwnerPhotoUrl] = useState<string | null>(null);
   const [viewNoteItem, setViewNoteItem] = useState<any | null>(null);
   const [noteCopied, setNoteCopied] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
 
   useEffect(() => {
     const fetchSharedFolder = async () => {
@@ -83,8 +129,9 @@ export default function ShareView({ shareId }: { shareId: string }) {
           return;
         }
 
-        const { userId, folderId, ownerName: fetchedOwnerName } = shareDoc.data();
+        const { userId, folderId, ownerName: fetchedOwnerName, ownerPhotoUrl: fetchedPhotoUrl } = shareDoc.data();
         if (fetchedOwnerName) setOwnerName(fetchedOwnerName);
+        if (fetchedPhotoUrl) setOwnerPhotoUrl(fetchedPhotoUrl);
         
         // Fetch all folders and items for this user
         // The security rules allow reading if the folder isPublic == true
@@ -174,7 +221,21 @@ export default function ShareView({ shareId }: { shareId: string }) {
   }, [shareId]);
 
   if (loading) {
-    return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div></div>;
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+        <div className="bg-slate-200 animate-pulse h-32 w-full border-b border-slate-300"></div>
+        <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-8">
+          <div className="h-6 w-32 bg-slate-200 animate-pulse rounded mb-4"></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+            {[1, 2, 3, 4].map(i => <div key={i} className="h-20 bg-slate-200 animate-pulse rounded-xl"></div>)}
+          </div>
+          <div className="h-6 w-32 bg-slate-200 animate-pulse rounded mb-4"></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-32 bg-slate-200 animate-pulse rounded-xl"></div>)}
+          </div>
+        </main>
+      </div>
+    );
   }
 
   if (error || !rootFolder) {
@@ -215,22 +276,92 @@ export default function ShareView({ shareId }: { shareId: string }) {
   const currentFolder = findFolder(rootFolder, currentFolderId) || rootFolder;
   const breadcrumbs = getBreadcrumbs(rootFolder, currentFolderId) || [rootFolder];
 
+  useEffect(() => {
+    if (rootFolder && ownerName) {
+      document.title = `${rootFolder.name} — LinkVaultPro`;
+      const metaDescription = document.querySelector('meta[name="description"]');
+      if (metaDescription) {
+        metaDescription.setAttribute("content", `Shared folder by ${ownerName} on LinkVaultPro`);
+      }
+    }
+  }, [rootFolder, ownerName]);
+
+  const handleSaveToLVP = async () => {
+    if (!auth.currentUser) {
+      const provider = new GoogleAuthProvider();
+      try {
+        await signInWithPopup(auth, provider);
+      } catch (err) {
+        console.error("Sign in failed", err);
+        return;
+      }
+    }
+
+    if (!auth.currentUser || !rootFolder) return;
+
+    setIsSaving(true);
+    try {
+      const newFolderId = 'folder_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      const userUid = auth.currentUser.uid;
+
+      await setDoc(doc(db, `users/${userUid}/folders/${newFolderId}`), {
+        name: rootFolder.name + ' (Shared)',
+        parentId: 'root',
+        color: rootFolder.color || null,
+        isPublic: false,
+        dateAdded: Date.now()
+      });
+
+      for (const item of rootFolder.links) {
+        const newItemId = 'item_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        await setDoc(doc(db, `users/${userUid}/items/${newItemId}`), {
+          ...item,
+          id: newItemId,
+          folderId: newFolderId,
+          dateAdded: Date.now()
+        });
+      }
+
+      setIsSaved(true);
+    } catch (err) {
+      console.error("Failed to save folder", err);
+      alert("Failed to save folder to your account.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
-      <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center px-4 sm:px-8 justify-between sticky top-0 z-30">
-        <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center">
-            <Globe size={18} className="text-white" />
+      <div className="bg-gradient-to-b from-slate-100 to-slate-50 border-b border-slate-200 px-4 sm:px-8 py-10">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+          <div className="flex items-center gap-4">
+            {ownerPhotoUrl ? (
+              <img src={ownerPhotoUrl} alt={ownerName} className="w-12 h-12 rounded-full border-2 border-white shadow-sm" referrerPolicy="no-referrer" />
+            ) : (
+              <div className="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold text-xl border-2 border-white shadow-sm">
+                {ownerName.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <div>
+              <h1 className="text-3xl font-bold text-slate-900 mb-1">{rootFolder.name}</h1>
+              <div className="flex items-center text-sm text-slate-600 gap-2">
+                <span>Shared by @{ownerName}</span>
+                <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+                <span>{rootFolder.folders.length} folders • {rootFolder.links.length} items</span>
+              </div>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-800 leading-tight">Shared Folder</h1>
-            <p className="text-xs text-slate-500 font-medium">Shared by {ownerName}</p>
-          </div>
+          <button 
+            onClick={handleSaveToLVP}
+            disabled={isSaving || isSaved}
+            className="px-5 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-slate-800 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-70"
+          >
+            {isSaved ? <Check size={18} /> : (isSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <span>+</span>)}
+            {isSaved ? 'Saved!' : 'Save to my LVP'}
+          </button>
         </div>
-        <a href="/" className="text-sm font-medium text-blue-500 hover:text-blue-600">
-          Create your own
-        </a>
-      </header>
+      </div>
 
       <div className="px-4 sm:px-8 py-3 flex items-center space-x-1 sm:space-x-2 text-sm text-slate-500 overflow-x-auto whitespace-nowrap hide-scrollbar border-b border-slate-200/60 bg-white">
         {breadcrumbs.map((f, i) => (
@@ -247,10 +378,19 @@ export default function ShareView({ shareId }: { shareId: string }) {
       </div>
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-8">
-        {currentFolder.folders.length > 0 && (
+        {(currentFolder.folders.length > 0 || currentFolderId !== rootFolder.id) && (
           <div className="mb-8">
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Folders</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {currentFolderId !== rootFolder.id && (
+                <UpFolderCard 
+                  onClick={() => {
+                    const parent = breadcrumbs[breadcrumbs.length - 2];
+                    if (parent) setCurrentFolderId(parent.id);
+                  }} 
+                  parentName={breadcrumbs[breadcrumbs.length - 2]?.name || 'parent'}
+                />
+              )}
               {currentFolder.folders.map(folder => (
                 <SharedFolderCard 
                   key={folder.id}
@@ -286,6 +426,29 @@ export default function ShareView({ shareId }: { shareId: string }) {
           </div>
         )}
       </main>
+
+      {/* Branding Footer */}
+      <footer className="bg-slate-900 text-white py-12 px-4 sm:px-8 mt-auto">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-center md:text-left">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center shadow-lg">
+              <Globe size={24} className="text-white" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold">Powered by LinkVaultPro</h3>
+              <p className="text-slate-400 text-sm">Your personal link & note vault</p>
+            </div>
+          </div>
+          <a 
+            href="https://linkvaultpro.vercel.app" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="px-6 py-3 bg-white text-black font-medium rounded-lg hover:bg-slate-100 transition-colors shadow-sm"
+          >
+            Try LinkVaultPro Free
+          </a>
+        </div>
+      </footer>
 
       {/* View Note Modal */}
       {viewNoteItem && (
