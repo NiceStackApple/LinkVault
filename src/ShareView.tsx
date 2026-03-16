@@ -5,6 +5,7 @@ import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { Folder, buildTree } from './sync';
 import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X, Check, Copy, ArrowUp, Link as LinkIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { faviconBase64 } from './faviconBase64';
 
 const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> = ({ link, onOpenNote }) => {
   const [copied, setCopied] = useState(false);
@@ -413,7 +414,7 @@ export default function ShareView({
           </div>
         </div>
       )}
-      <div className="bg-gradient-to-b from-slate-100 to-slate-50 border-b border-slate-200 px-4 sm:px-8 py-10">
+      <div className={`bg-gradient-to-b from-slate-100 to-slate-50 border-b border-slate-200 px-4 sm:px-8 ${isShortcutView ? 'py-3' : 'py-5'}`}>
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             {ownerPhotoUrl ? (
@@ -518,14 +519,12 @@ export default function ShareView({
 
       {/* Branding Footer */}
       {!isShortcutView && (
-        <footer className="bg-slate-900 text-white py-12 px-4 sm:px-8 mt-auto">
+        <footer className="bg-slate-900 text-white py-4 px-4 sm:px-8 mt-auto">
           <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-center md:text-left">
             <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center shadow-lg">
-                <img src="/favicon.png" alt="LinkVaultPro" width="32" height="32" />
-              </div>
+              <img src={faviconBase64} alt="LinkVaultPro Logo" className="w-10 h-10 rounded-lg" referrerPolicy="no-referrer" />
               <div>
-                <h3 className="text-lg font-bold">Powered by LinkVaultPro</h3>
+                <h3 className="text-lg font-bold">LinkVault<span className="font-normal">Pro</span></h3>
                 <p className="text-slate-400 text-sm">Your personal link & note vault</p>
               </div>
             </div>

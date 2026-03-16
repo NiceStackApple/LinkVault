@@ -34,7 +34,8 @@ import {
   Clock,
   Settings,
   LogOut,
-  RefreshCw
+  RefreshCw,
+  ArrowUp
 } from 'lucide-react';
 
 import { auth, googleProvider, db } from './firebase';
@@ -625,6 +626,23 @@ const LinkCard: React.FC<{
             )}
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+const UpFolderCard: React.FC<{ onClick: () => void, parentName: string }> = ({ onClick, parentName }) => {
+  return (
+    <div 
+      className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow flex items-center cursor-pointer"
+      onClick={onClick}
+    >
+      <div className="w-10 h-10 rounded-lg flex items-center justify-center mr-3 flex-shrink-0 bg-slate-100 text-slate-500">
+        <ArrowUp size={20} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <h3 className="font-medium text-slate-800 truncate">..</h3>
+        <p className="text-xs text-slate-500 mt-0.5 truncate">Go up to {parentName}</p>
       </div>
     </div>
   );
@@ -2063,10 +2081,19 @@ export default function App() {
             ) : (
               <>
                 {/* Folders Section */}
-                {currentFolder.folders.length > 0 && (
+                {(currentFolder.folders.length > 0 || currentFolderId !== 'root') && (
                   <div className="mb-8">
                     <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Folders</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                      {currentFolderId !== 'root' && (
+                        <UpFolderCard 
+                          onClick={() => {
+                            const parentId = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2].id : 'root';
+                            handleOpenFolder(parentId);
+                          }}
+                          parentName={breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2].name : 'Root'}
+                        />
+                      )}
                       {currentFolder.folders.map(folder => (
                         <FolderCard 
                           key={folder.id}
