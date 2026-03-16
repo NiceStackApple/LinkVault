@@ -21,6 +21,9 @@ export interface Folder {
   color?: string;
   isPublic?: boolean;
   shareId?: string | null;
+  type?: string;
+  shortcutShareId?: string;
+  shortcutOwnerName?: string;
 }
 
 export const flattenTree = (root: Folder, parentId: string | null = null): { folders: any[], items: any[] } => {
@@ -36,7 +39,10 @@ export const flattenTree = (root: Folder, parentId: string | null = null): { fol
       color: root.color || null,
       isPublic: root.isPublic || false,
       shareId: root.shareId || null,
-      starred: root.starred || false
+      starred: root.starred || false,
+      type: root.type || null,
+      shortcutShareId: root.shortcutShareId || null,
+      shortcutOwnerName: root.shortcutOwnerName || null
     });
   }
 
@@ -83,7 +89,10 @@ export const buildTree = (folders: any[], items: any[]): Folder => {
       starred: f.starred,
       color: f.color,
       isPublic: f.isPublic,
-      shareId: f.shareId
+      shareId: f.shareId,
+      type: f.type,
+      shortcutShareId: f.shortcutShareId,
+      shortcutOwnerName: f.shortcutOwnerName
     });
   }
 

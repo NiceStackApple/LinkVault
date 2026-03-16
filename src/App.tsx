@@ -66,6 +66,9 @@ interface Folder {
   color?: string;
   isPublic?: boolean;
   shareId?: string | null;
+  type?: string;
+  shortcutShareId?: string;
+  shortcutOwnerName?: string;
 }
 
 const FOLDER_COLORS = [
@@ -672,6 +675,10 @@ const FolderCard: React.FC<{
           <div className="absolute -bottom-1 -right-1 bg-blue-500 rounded-full p-0.5 border-2 border-white" title="Publicly shared">
             <Globe size={10} className="text-white" />
           </div>
+        ) : folder.type === 'shortcut' ? (
+          <div className="absolute -bottom-1 -right-1 bg-indigo-500 rounded-full p-0.5 border-2 border-white" title="Shortcut">
+            <LinkIcon size={10} className="text-white" />
+          </div>
         ) : (
           <div className="absolute -bottom-1 -right-1 bg-slate-400 rounded-full p-0.5 border-2 border-white" title="Private folder">
             <Lock size={10} className="text-white" />
@@ -685,7 +692,11 @@ const FolderCard: React.FC<{
           isEditing={isEditing}
           setIsEditing={setIsEditing}
         />
-        <p className="text-xs text-slate-500 mt-0.5">{folder.folders.length} folders, {folder.links.length} items</p>
+        {folder.type === 'shortcut' ? (
+          <p className="text-xs text-indigo-500 mt-0.5">Shortcut • by @{folder.shortcutOwnerName || 'Someone'}</p>
+        ) : (
+          <p className="text-xs text-slate-500 mt-0.5">{folder.folders.length} folders, {folder.links.length} items</p>
+        )}
       </div>
       
       <div className="relative" ref={menuRef}>
@@ -733,7 +744,7 @@ const FolderCard: React.FC<{
               <Edit2 size={14} className="mr-2" />
               Rename
             </button>
-            {user && onShareRequest && (
+            {user && onShareRequest && folder.type !== 'shortcut' && (
               <button 
                 className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center"
                 onClick={(e) => { e.stopPropagation(); onShareRequest(folder); setShowMenu(false); }}
@@ -778,7 +789,11 @@ const SidebarFolder: React.FC<{ folder: Folder, currentFolderId: string, onSelec
             <span className="w-[14px] inline-block" />
           )}
         </button>
-        <FolderIcon size={16} className={`mr-2 ${isSelected ? 'text-slate-800' : 'text-slate-400'}`} />
+        {folder.type === 'shortcut' ? (
+          <LinkIcon size={16} className={`mr-2 ${isSelected ? 'text-indigo-600' : 'text-indigo-400'}`} />
+        ) : (
+          <FolderIcon size={16} className={`mr-2 ${isSelected ? 'text-slate-800' : 'text-slate-400'}`} />
+        )}
         <span className="text-sm truncate">{folder.name}</span>
       </div>
       {isOpen && folder.folders.map(sub => (
@@ -802,6 +817,9 @@ const cloneFolder = (folder: Folder): Folder => ({
 });
 
 const setPublicRecursive = (folder: Folder, isPublic: boolean): Folder => {
+  if (folder.type === 'shortcut') {
+    return folder; // Do not change isPublic for shortcuts
+  }
   return {
     ...folder,
     isPublic,
@@ -1957,18 +1975,32 @@ export default function App() {
         </div>
 
         {/* Content Area */}
-        <div 
-          className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar"
-          onClick={() => {
-            if (selectedItemIds.length > 0 || explicitBulkMode) {
-              setSelectedItemIds([]);
-              setExplicitBulkMode(false);
-            }
-          }}
-        >
-          <div className="max-w-7xl mx-auto">
-            
-            {searchResults ? (
+        {currentFolder.type === 'shortcut' && currentFolder.shortcutShareId ? (
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            <ShareView 
+              shareId={currentFolder.shortcutShareId} 
+              isShortcutView={true} 
+              onRemoveShortcut={() => {
+                handleDeleteFolder(currentFolder.id);
+                handleOpenFolder('root');
+              }}
+              onGoBackToApp={() => handleOpenFolder('root')}
+              onSaveSuccess={() => showToast("Shortcut added to your Root folder")}
+            />
+          </div>
+        ) : (
+          <div 
+            className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar"
+            onClick={() => {
+              if (selectedItemIds.length > 0 || explicitBulkMode) {
+                setSelectedItemIds([]);
+                setExplicitBulkMode(false);
+              }
+            }}
+          >
+            <div className="max-w-7xl mx-auto">
+              
+              {searchResults ? (
               <div>
                 <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">
                   Search Results for "{searchQuery}"
@@ -2101,6 +2133,7 @@ export default function App() {
             )}
           </div>
         </div>
+        )}
       </main>
 
       {/* Share Folder Modal */}
