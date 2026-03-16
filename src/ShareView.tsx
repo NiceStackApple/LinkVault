@@ -220,6 +220,16 @@ export default function ShareView({ shareId }: { shareId: string }) {
     fetchSharedFolder();
   }, [shareId]);
 
+  useEffect(() => {
+    if (rootFolder && ownerName) {
+      document.title = `${rootFolder.name} — LinkVaultPro`;
+      const metaDescription = document.querySelector('meta[name="description"]');
+      if (metaDescription) {
+        metaDescription.setAttribute("content", `Shared folder by ${ownerName} on LinkVaultPro`);
+      }
+    }
+  }, [rootFolder, ownerName]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
@@ -275,16 +285,6 @@ export default function ShareView({ shareId }: { shareId: string }) {
 
   const currentFolder = findFolder(rootFolder, currentFolderId) || rootFolder;
   const breadcrumbs = getBreadcrumbs(rootFolder, currentFolderId) || [rootFolder];
-
-  useEffect(() => {
-    if (rootFolder && ownerName) {
-      document.title = `${rootFolder.name} — LinkVaultPro`;
-      const metaDescription = document.querySelector('meta[name="description"]');
-      if (metaDescription) {
-        metaDescription.setAttribute("content", `Shared folder by ${ownerName} on LinkVaultPro`);
-      }
-    }
-  }, [rootFolder, ownerName]);
 
   const handleSaveToLVP = async () => {
     if (!auth.currentUser) {
