@@ -887,6 +887,59 @@ export default function App() {
   const [showLoading, setShowLoading] = useState(true);
   const [fadeLoading, setFadeLoading] = useState(false);
 
+  // PWA Install Prompt State
+  const [showInstallButton, setShowInstallButton] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isIos, setIsIos] = useState(false);
+  const [showIosTooltip, setShowIosTooltip] = useState(false);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallButton(true);
+    };
+
+    const handleAppInstalled = () => {
+      setShowInstallButton(false);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    // iOS detection
+    const ios = /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
+    const isInStandaloneMode = window.matchMedia('(display-mode: standalone)').matches;
+    
+    if (ios && !isInStandaloneMode) {
+      setIsIos(true);
+      setShowInstallButton(true);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (isIos) {
+      setShowIosTooltip(true);
+      setTimeout(() => setShowIosTooltip(false), 5000);
+      return;
+    }
+
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setShowInstallButton(false);
+      }
+      setDeferredPrompt(null);
+    }
+  };
+
   useEffect(() => {
     if (loadingState === 'READY') {
       setFadeLoading(true);
@@ -1875,13 +1928,30 @@ export default function App() {
             </header>
           ) : (
             <header className="h-16 bg-white/60 backdrop-blur-md border-b border-slate-200/60 flex items-center px-4 sm:px-8 justify-between gap-4">
-              <div className="flex items-center min-w-0">
+              <div className="flex items-center min-w-0 relative">
                 <button 
                   className="mr-2 lg:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-md flex-shrink-0"
                   onClick={() => setIsSidebarOpen(true)}
                 >
                   <Menu size={20} />
                 </button>
+                {showInstallButton && (
+                  <div className="relative">
+                    <button
+                      onClick={handleInstallClick}
+                      className="md:hidden flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg shadow-sm hover:bg-slate-50 mr-2 transition-colors"
+                    >
+                      <Download size={14} />
+                      <span>Install</span>
+                    </button>
+                    {showIosTooltip && (
+                      <div className="absolute top-full left-0 mt-2 w-48 p-2 bg-slate-800 text-white text-xs rounded shadow-lg z-50">
+                        To install: tap the Share button (□↑) then 'Add to Home Screen'
+                        <div className="absolute -top-1 left-4 w-2 h-2 bg-slate-800 transform rotate-45"></div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex-1 max-w-md relative">

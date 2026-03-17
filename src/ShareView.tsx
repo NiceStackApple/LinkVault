@@ -147,36 +147,41 @@ export default function ShareView({
     return () => unsubscribe();
   }, []);
 
-  useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
+  const checkIfSaved = async () => {
+    if (!currentUser || !shareId) return setIsSaved(false);
+    
+    try {
+      const q = query(
+        collection(db, `users/${currentUser.uid}/folders`),
+        where("type", "==", "shortcut"),
+        where("shortcutShareId", "==", shareId)
+      );
+      const snapshot = await getDocs(q);
+      setIsSaved(!snapshot.empty);
+    } catch (e) {
+      console.error("Error checking saved state", e);
+    }
+  };
 
-    const checkSaved = () => {
-      if (currentUser && shareId) {
-        try {
-          const existingQuery = query(
-            collection(db, `users/${currentUser.uid}/folders`), 
-            where('type', '==', 'shortcut'),
-            where('shortcutShareId', '==', shareId)
-          );
-          unsubscribe = onSnapshot(existingQuery, (snapshot) => {
-            setIsSaved(!snapshot.empty);
-          }, (error) => {
-            console.error("Error checking saved state", error);
-          });
-        } catch (e) {
-          console.error("Error setting up saved state listener", e);
-        }
-      } else {
-        setIsSaved(false);
+  useEffect(() => {
+    checkIfSaved();
+
+    const handleFocus = () => {
+      checkIfSaved();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkIfSaved();
       }
     };
-    
-    checkSaved();
-    
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [currentUser, shareId]);
 
@@ -374,11 +379,15 @@ export default function ShareView({
       const userUid = auth.currentUser.uid;
 
       // Check if shortcut already exists
-      const existingQuery = query(collection(db, `users/${userUid}/folders`), where('shortcutShareId', '==', shareId));
+      const existingQuery = query(
+        collection(db, `users/${userUid}/folders`), 
+        where('type', '==', 'shortcut'),
+        where('shortcutShareId', '==', shareId)
+      );
       const existingSnapshot = await getDocs(existingQuery);
       
       if (!existingSnapshot.empty) {
-        setIsSaved(true);
+        await checkIfSaved();
         setIsSaving(false);
         return;
       }
@@ -396,7 +405,7 @@ export default function ShareView({
         shortcutOwnerName: ownerName
       });
 
-      setIsSaved(true);
+      await checkIfSaved();
       if (onSaveSuccess) {
         onSaveSuccess();
       } else {
@@ -431,25 +440,7 @@ export default function ShareView({
         </div>
       )}
       <div className={`bg-gradient-to-b from-slate-100 to-slate-50 border-b border-slate-200 px-4 sm:px-8 ${isShortcutView ? 'py-3' : 'py-5'}`}>
-        <div className="max-w-7xl mx-auto flex flex-col gap-4">
-          <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-2 opacity-60">
-              <img src={faviconBase64} alt="LinkVaultPro Logo" className="w-6 h-6 rounded-md" referrerPolicy="no-referrer" />
-              <span className="text-sm font-bold text-slate-700">LinkVault<span className="font-normal">Pro</span></span>
-            </div>
-            
-            {!isShortcutView && (
-              <button 
-                onClick={handleSaveToLVP}
-                disabled={isSaving || isSaved}
-                className="px-5 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-slate-800 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-70"
-              >
-                {isSaved ? <Check size={18} /> : (isSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <span>+</span>)}
-                {isSaved ? 'Already saved' : 'Save to my LVP'}
-              </button>
-            )}
-          </div>
-
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             {ownerPhotoUrl ? (
               <img src={ownerPhotoUrl} alt={ownerName} className="w-12 h-12 rounded-full border-2 border-white shadow-sm" referrerPolicy="no-referrer" />
@@ -467,6 +458,16 @@ export default function ShareView({
               </div>
             </div>
           </div>
+          {!isShortcutView && (
+            <button 
+              onClick={handleSaveToLVP}
+              disabled={isSaving || isSaved}
+              className="px-5 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-slate-800 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-70"
+            >
+              {isSaved ? <Check size={18} /> : (isSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <span>+</span>)}
+              {isSaved ? 'Already saved' : 'Save to my LVP'}
+            </button>
+          )}
         </div>
       </div>
 
