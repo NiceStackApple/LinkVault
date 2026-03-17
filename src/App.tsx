@@ -1205,6 +1205,23 @@ export default function App() {
 
   const [folderToDelete, setFolderToDelete] = useState<Folder | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
+  const [deleteCountdown, setDeleteCountdown] = useState(0);
+
+  useEffect(() => {
+    if (folderToDelete?.type === 'shortcut') {
+      setDeleteCountdown(3);
+      const interval = setInterval(() => {
+        setDeleteCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [folderToDelete]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -2467,62 +2484,96 @@ export default function App() {
             <div className="px-6 py-4 border-b border-red-100 bg-red-50 flex justify-between items-center">
               <div className="flex items-center text-red-600">
                 <AlertTriangle size={20} className="mr-2" />
-                <h3 className="text-lg font-semibold">Delete Folder</h3>
+                <h3 className="text-lg font-semibold">Delete {folderToDelete.type === 'shortcut' ? 'Shortcut' : 'Folder'}</h3>
               </div>
               <button onClick={() => { setFolderToDelete(null); setDeleteConfirmationText(''); }} className="text-red-400 hover:text-red-600">
                 <X size={20} />
               </button>
             </div>
             <div className="p-6">
-              <p className="text-sm text-slate-700 mb-4">
-                You are about to delete the folder <strong>"{folderToDelete.name}"</strong>.
-              </p>
-              
-              {(folderToDelete.folders.length > 0 || folderToDelete.links.length > 0) && (
-                <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-4">
-                  <p className="text-sm text-orange-800 font-medium mb-1">Warning: This folder is not empty!</p>
-                  <p className="text-xs text-orange-700">
-                    It contains {folderToDelete.folders.length} sub-folder(s) and {folderToDelete.links.length} item(s). 
-                    Deleting this folder will permanently remove all its contents.
+              {folderToDelete.type === 'shortcut' ? (
+                <>
+                  <p className="text-sm text-slate-700 mb-4">
+                    Remove shortcut to <strong>"{folderToDelete.name}"</strong>?
                   </p>
-                </div>
+                  <p className="text-sm text-slate-500 mb-6">
+                    This will only remove the shortcut, not the original folder.
+                  </p>
+                  <div className="flex justify-end space-x-3 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => { setFolderToDelete(null); setDeleteConfirmationText(''); }}
+                      className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deleteCountdown > 0}
+                      onClick={() => {
+                        handleDeleteFolder(folderToDelete.id);
+                        setFolderToDelete(null);
+                        setDeleteConfirmationText('');
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {deleteCountdown > 0 ? `Delete (${deleteCountdown})` : 'Delete'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-slate-700 mb-4">
+                    You are about to delete the folder <strong>"{folderToDelete.name}"</strong>.
+                  </p>
+                  
+                  {(folderToDelete.folders.length > 0 || folderToDelete.links.length > 0) && (
+                    <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-4">
+                      <p className="text-sm text-orange-800 font-medium mb-1">Warning: This folder is not empty!</p>
+                      <p className="text-xs text-orange-700">
+                        It contains {folderToDelete.folders.length} sub-folder(s) and {folderToDelete.links.length} item(s). 
+                        Deleting this folder will permanently remove all its contents.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      To confirm, type <strong>{folderToDelete.name}</strong> below:
+                    </label>
+                    <input
+                      type="text"
+                      autoFocus
+                      value={deleteConfirmationText}
+                      onChange={(e) => setDeleteConfirmationText(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      placeholder={folderToDelete.name}
+                    />
+                  </div>
+
+                  <div className="flex justify-end space-x-3 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => { setFolderToDelete(null); setDeleteConfirmationText(''); }}
+                      className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deleteConfirmationText !== folderToDelete.name}
+                      onClick={() => {
+                        handleDeleteFolder(folderToDelete.id);
+                        setFolderToDelete(null);
+                        setDeleteConfirmationText('');
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Delete Permanently
+                    </button>
+                  </div>
+                </>
               )}
-
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  To confirm, type <strong>{folderToDelete.name}</strong> below:
-                </label>
-                <input
-                  type="text"
-                  autoFocus
-                  value={deleteConfirmationText}
-                  onChange={(e) => setDeleteConfirmationText(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                  placeholder={folderToDelete.name}
-                />
-              </div>
-
-              <div className="flex justify-end space-x-3 mt-6">
-                <button
-                  type="button"
-                  onClick={() => { setFolderToDelete(null); setDeleteConfirmationText(''); }}
-                  className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={deleteConfirmationText !== folderToDelete.name}
-                  onClick={() => {
-                    handleDeleteFolder(folderToDelete.id);
-                    setFolderToDelete(null);
-                    setDeleteConfirmationText('');
-                  }}
-                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Delete Permanently
-                </button>
-              </div>
             </div>
           </div>
         </div>

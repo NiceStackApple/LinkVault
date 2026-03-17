@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase';
-import { doc, getDoc, collection, getDocs, query, where, setDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, query, where, setDoc, onSnapshot } from 'firebase/firestore';
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { Folder, buildTree } from './sync';
 import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X, Check, Copy, ArrowUp, Link as LinkIcon } from 'lucide-react';
@@ -148,20 +148,36 @@ export default function ShareView({
   }, []);
 
   useEffect(() => {
-    const checkSaved = async () => {
+    let unsubscribe: (() => void) | undefined;
+
+    const checkSaved = () => {
       if (currentUser && shareId) {
         try {
-          const existingQuery = query(collection(db, `users/${currentUser.uid}/folders`), where('shortcutShareId', '==', shareId));
-          const existingSnapshot = await getDocs(existingQuery);
-          if (!existingSnapshot.empty) {
-            setIsSaved(true);
-          }
+          const existingQuery = query(
+            collection(db, `users/${currentUser.uid}/folders`), 
+            where('type', '==', 'shortcut'),
+            where('shortcutShareId', '==', shareId)
+          );
+          unsubscribe = onSnapshot(existingQuery, (snapshot) => {
+            setIsSaved(!snapshot.empty);
+          }, (error) => {
+            console.error("Error checking saved state", error);
+          });
         } catch (e) {
-          console.error("Error checking saved state", e);
+          console.error("Error setting up saved state listener", e);
         }
+      } else {
+        setIsSaved(false);
       }
     };
+    
     checkSaved();
+    
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
   }, [currentUser, shareId]);
 
   useEffect(() => {
@@ -415,7 +431,25 @@ export default function ShareView({
         </div>
       )}
       <div className={`bg-gradient-to-b from-slate-100 to-slate-50 border-b border-slate-200 px-4 sm:px-8 ${isShortcutView ? 'py-3' : 'py-5'}`}>
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+        <div className="max-w-7xl mx-auto flex flex-col gap-4">
+          <div className="flex items-center justify-between w-full">
+            <div className="flex items-center gap-2 opacity-60">
+              <img src={faviconBase64} alt="LinkVaultPro Logo" className="w-6 h-6 rounded-md" referrerPolicy="no-referrer" />
+              <span className="text-sm font-bold text-slate-700">LinkVault<span className="font-normal">Pro</span></span>
+            </div>
+            
+            {!isShortcutView && (
+              <button 
+                onClick={handleSaveToLVP}
+                disabled={isSaving || isSaved}
+                className="px-5 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-slate-800 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-70"
+              >
+                {isSaved ? <Check size={18} /> : (isSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <span>+</span>)}
+                {isSaved ? 'Already saved' : 'Save to my LVP'}
+              </button>
+            )}
+          </div>
+
           <div className="flex items-center gap-4">
             {ownerPhotoUrl ? (
               <img src={ownerPhotoUrl} alt={ownerName} className="w-12 h-12 rounded-full border-2 border-white shadow-sm" referrerPolicy="no-referrer" />
@@ -433,16 +467,6 @@ export default function ShareView({
               </div>
             </div>
           </div>
-          {!isShortcutView && (
-            <button 
-              onClick={handleSaveToLVP}
-              disabled={isSaving || isSaved}
-              className="px-5 py-2.5 bg-black text-white rounded-lg font-medium hover:bg-slate-800 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-70"
-            >
-              {isSaved ? <Check size={18} /> : (isSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <span>+</span>)}
-              {isSaved ? 'Already saved' : 'Save to my LVP'}
-            </button>
-          )}
         </div>
       </div>
 
@@ -520,19 +544,17 @@ export default function ShareView({
       {/* Branding Footer */}
       {!isShortcutView && (
         <footer className="bg-slate-900 text-white py-4 px-4 sm:px-8 mt-auto">
-          <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-center md:text-left">
-            <div className="flex items-center gap-4">
-              <img src={faviconBase64} alt="LinkVaultPro Logo" className="w-10 h-10 rounded-lg" referrerPolicy="no-referrer" />
-              <div>
-                <h3 className="text-lg font-bold">LinkVault<span className="font-normal">Pro</span></h3>
-                <p className="text-slate-400 text-sm">Your personal link & note vault</p>
-              </div>
+          <div className="max-w-7xl mx-auto flex items-center justify-between text-sm">
+            <div className="text-slate-400">
+              Powered by <span className="font-bold text-white">LinkVault<span className="font-normal">Pro</span></span>
             </div>
             <a 
-              href="/" 
-              className="px-6 py-3 bg-white text-black font-medium rounded-lg hover:bg-slate-100 transition-colors shadow-sm"
+              href="https://linkvaultpro.vercel.app" 
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-slate-300 hover:text-white transition-colors flex items-center gap-1"
             >
-              Try LinkVaultPro Free
+              Try it free <ChevronRight size={14} />
             </a>
           </div>
         </footer>
