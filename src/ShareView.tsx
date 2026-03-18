@@ -3,7 +3,7 @@ import { auth, db } from './firebase';
 import { doc, getDoc, collection, getDocs, query, where, setDoc, onSnapshot } from 'firebase/firestore';
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { Folder, buildTree } from './sync';
-import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X, Check, Copy, ArrowUp, Link as LinkIcon } from 'lucide-react';
+import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X, Check, Copy, ArrowUp, Link as LinkIcon, ArrowUpDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { faviconBase64 } from './faviconBase64';
 
@@ -134,6 +134,14 @@ export default function ShareView({
   const [isSaved, setIsSaved] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [sortPreference, setSortPreference] = useState<'newest' | 'oldest' | 'az' | 'za'>(() => {
+    return (localStorage.getItem('lvp_shared_sort_preference') as any) || 'newest';
+  });
+  const [isSortDropdownOpen, setIsSortDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('lvp_shared_sort_preference', sortPreference);
+  }, [sortPreference]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -419,6 +427,65 @@ export default function ShareView({
     }
   };
 
+  const sortItems = (items: any[]) => {
+    const sorted = [...items];
+    return sorted.sort((a: any, b: any) => {
+      const aObj = a.link || a;
+      const bObj = b.link || b;
+      const timeA = aObj.createdAt || aObj.dateAdded || 0;
+      const timeB = bObj.createdAt || bObj.dateAdded || 0;
+      
+      if (sortPreference === 'newest') {
+        return timeB - timeA;
+      } else if (sortPreference === 'oldest') {
+        return timeA - timeB;
+      } else if (sortPreference === 'az') {
+        const nameA = (aObj.name || aObj.title || '').toLowerCase();
+        const nameB = (bObj.name || bObj.title || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      } else if (sortPreference === 'za') {
+        const nameA = (aObj.name || aObj.title || '').toLowerCase();
+        const nameB = (bObj.name || bObj.title || '').toLowerCase();
+        return nameB.localeCompare(nameA);
+      }
+      return 0;
+    });
+  };
+
+  const sortDropdown = (
+    <div className="relative z-50">
+      <button 
+        onClick={(e) => { e.stopPropagation(); setIsSortDropdownOpen(!isSortDropdownOpen); }}
+        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white/60 backdrop-blur-md border border-white/40 rounded-xl shadow-sm hover:border-slate-300 hover:shadow-md transition-all"
+      >
+        <ArrowUpDown size={14} />
+        <span>Sort: {sortPreference === 'newest' ? 'Newest' : sortPreference === 'oldest' ? 'Oldest' : sortPreference === 'az' ? 'A → Z' : 'Z → A'}</span>
+      </button>
+      {isSortDropdownOpen && (
+        <>
+          <div 
+            className="fixed inset-0 z-40" 
+            onClick={() => setIsSortDropdownOpen(false)}
+          />
+          <div className="absolute right-0 mt-2 w-40 bg-white border border-slate-100 rounded-xl shadow-lg py-1 z-50">
+            <button onClick={() => { setSortPreference('newest'); setIsSortDropdownOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+              Newest first {sortPreference === 'newest' && <Check size={14} />}
+            </button>
+            <button onClick={() => { setSortPreference('oldest'); setIsSortDropdownOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+              Oldest first {sortPreference === 'oldest' && <Check size={14} />}
+            </button>
+            <button onClick={() => { setSortPreference('az'); setIsSortDropdownOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+              A → Z {sortPreference === 'az' && <Check size={14} />}
+            </button>
+            <button onClick={() => { setSortPreference('za'); setIsSortDropdownOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+              Z → A {sortPreference === 'za' && <Check size={14} />}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div className={`${isShortcutView ? 'h-full' : 'min-h-screen'} bg-slate-50 flex flex-col font-sans text-slate-900`}>
       {isShortcutView && (
@@ -488,7 +555,10 @@ export default function ShareView({
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-8">
         {(currentFolder.folders.length > 0 || currentFolderId !== rootFolder.id || isShortcutView) && (
           <div className="mb-8">
-            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Folders</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Folders</h2>
+              {sortDropdown}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {currentFolderId !== rootFolder.id ? (
                 <UpFolderCard 
@@ -506,7 +576,7 @@ export default function ShareView({
                   />
                 )
               )}
-              {currentFolder.folders.map(folder => (
+              {sortItems(currentFolder.folders).map(folder => (
                 <SharedFolderCard 
                   key={folder.id}
                   folder={folder}
@@ -519,9 +589,12 @@ export default function ShareView({
 
         {currentFolder.links.length > 0 && (
           <div>
-            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Items</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Items</h2>
+              {currentFolder.folders.length === 0 && currentFolderId === rootFolder.id && !isShortcutView && sortDropdown}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {currentFolder.links.map(link => (
+              {sortItems(currentFolder.links).map(link => (
                 <SharedLinkCard 
                   key={link.id} 
                   link={link} 
