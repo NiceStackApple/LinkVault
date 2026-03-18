@@ -15,6 +15,17 @@
     <meta name="apple-mobile-web-app-title" content="LinkVaultPro" />
   </head>
   <body>
+    <script>
+      // Fix for cached index.html requesting old JS files
+      window.addEventListener('error', function(e) {
+        if (e.target.tagName === 'SCRIPT') {
+          if (!sessionStorage.getItem('app_reloaded')) {
+            sessionStorage.setItem('app_reloaded', 'true');
+            window.location.reload(true);
+          }
+        }
+      }, true);
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
