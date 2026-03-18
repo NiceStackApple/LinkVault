@@ -24,6 +24,7 @@ export interface Folder {
   type?: string;
   shortcutShareId?: string;
   shortcutOwnerName?: string;
+  createdAt?: number;
 }
 
 export const flattenTree = (root: Folder, parentId: string | null = null): { folders: any[], items: any[] } => {
@@ -35,7 +36,7 @@ export const flattenTree = (root: Folder, parentId: string | null = null): { fol
       id: root.id,
       name: root.name,
       parentId: parentId || 'root',
-      createdAt: Date.now(),
+      createdAt: root.createdAt !== undefined ? root.createdAt : Date.now(),
       color: root.color || null,
       isPublic: root.isPublic || false,
       shareId: root.shareId || null,
@@ -92,7 +93,8 @@ export const buildTree = (folders: any[], items: any[]): Folder => {
       shareId: f.shareId,
       type: f.type,
       shortcutShareId: f.shortcutShareId,
-      shortcutOwnerName: f.shortcutOwnerName
+      shortcutOwnerName: f.shortcutOwnerName,
+      createdAt: f.createdAt || f.dateAdded || 0
     });
   }
 

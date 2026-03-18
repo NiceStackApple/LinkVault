@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { faviconBase64 } from './faviconBase64';
 import { 
   Folder as FolderIcon, 
   ChevronRight, 
@@ -35,7 +34,8 @@ import {
   Settings,
   LogOut,
   RefreshCw,
-  ArrowUp
+  ArrowUp,
+  ArrowUpDown
 } from 'lucide-react';
 
 import { auth, googleProvider, db } from './firebase';
@@ -70,6 +70,7 @@ interface Folder {
   type?: string;
   shortcutShareId?: string;
   shortcutOwnerName?: string;
+  createdAt?: number;
 }
 
 const FOLDER_COLORS = [
@@ -1040,6 +1041,14 @@ export default function App() {
   const [isDeleteAccountModalOpen, setIsDeleteAccountModalOpen] = useState(false);
   const [isFabOpen, setIsFabOpen] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+  const [sortPreference, setSortPreference] = useState<'newest' | 'oldest' | 'az' | 'za'>(() => {
+    return (localStorage.getItem('lvp_sort_preference') as any) || 'newest';
+  });
+  const [isSortDropdownOpen, setIsSortDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('lvp_sort_preference', sortPreference);
+  }, [sortPreference]);
   
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -1336,7 +1345,8 @@ export default function App() {
       name: newFolderName.trim(),
       folders: [],
       links: [],
-      isPublic
+      isPublic,
+      createdAt: Date.now()
     };
     
     setRootFolder(prev => updateFolder(prev, currentFolderId, f => ({
@@ -1533,7 +1543,8 @@ export default function App() {
       name: unityFolderName.trim(),
       folders: [],
       links: [],
-      isPublic
+      isPublic,
+      createdAt: Date.now()
     };
 
     setRootFolder(prev => {
@@ -1727,6 +1738,65 @@ export default function App() {
     }
   };
 
+  function sortItems(items: any[]): any[] {
+    const sorted = [...items];
+    return sorted.sort((a: any, b: any) => {
+      const aObj = a.link || a;
+      const bObj = b.link || b;
+      const timeA = aObj.createdAt || aObj.dateAdded || 0;
+      const timeB = bObj.createdAt || bObj.dateAdded || 0;
+      
+      if (sortPreference === 'newest') {
+        return timeB - timeA;
+      } else if (sortPreference === 'oldest') {
+        return timeA - timeB;
+      } else if (sortPreference === 'az') {
+        const nameA = (aObj.name || aObj.title || '').toLowerCase();
+        const nameB = (bObj.name || bObj.title || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      } else if (sortPreference === 'za') {
+        const nameA = (aObj.name || aObj.title || '').toLowerCase();
+        const nameB = (bObj.name || bObj.title || '').toLowerCase();
+        return nameB.localeCompare(nameA);
+      }
+      return 0;
+    });
+  }
+
+  const sortDropdown = (
+    <div className="relative z-50">
+      <button 
+        onClick={(e) => { e.stopPropagation(); setIsSortDropdownOpen(!isSortDropdownOpen); }}
+        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white/60 backdrop-blur-md border border-white/40 rounded-xl shadow-sm hover:border-slate-300 hover:shadow-md transition-all"
+      >
+        <ArrowUpDown size={14} />
+        <span>Sort: {sortPreference === 'newest' ? 'Newest' : sortPreference === 'oldest' ? 'Oldest' : sortPreference === 'az' ? 'A → Z' : 'Z → A'}</span>
+      </button>
+      {isSortDropdownOpen && (
+        <>
+          <div 
+            className="fixed inset-0 z-40" 
+            onClick={() => setIsSortDropdownOpen(false)}
+          />
+          <div className="absolute right-0 mt-2 w-40 bg-white border border-slate-100 rounded-xl shadow-lg py-1 z-50">
+            <button onClick={() => { setSortPreference('newest'); setIsSortDropdownOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+              Newest first {sortPreference === 'newest' && <Check size={14} />}
+            </button>
+            <button onClick={() => { setSortPreference('oldest'); setIsSortDropdownOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+              Oldest first {sortPreference === 'oldest' && <Check size={14} />}
+            </button>
+            <button onClick={() => { setSortPreference('az'); setIsSortDropdownOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+              A → Z {sortPreference === 'az' && <Check size={14} />}
+            </button>
+            <button onClick={() => { setSortPreference('za'); setIsSortDropdownOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+              Z → A {sortPreference === 'za' && <Check size={14} />}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden selection:bg-slate-200 selection:text-slate-900">
       {/* Loading Screen Overlay */}
@@ -1755,7 +1825,7 @@ export default function App() {
       `}>
         <div className="p-5 border-b border-slate-200/60 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <img src={faviconBase64} alt="LinkVaultPro Logo" className="w-8 h-8 rounded-lg" referrerPolicy="no-referrer" />
+            <img src="/favicon.png" alt="LinkVaultPro Logo" className="w-8 h-8 rounded-lg" />
             <h1 className="text-xl font-bold tracking-tight text-black">LinkVault<span className="font-normal">Pro</span></h1>
           </div>
           <button className="lg:hidden text-slate-500 hover:text-slate-800" onClick={() => setIsSidebarOpen(false)}>
@@ -2107,15 +2177,18 @@ export default function App() {
               
               {searchResults ? (
               <div>
-                <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">
-                  Search Results for "{searchQuery}"
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">
+                    Search Results for "{searchQuery}"
+                  </h2>
+                  {(searchResults.folders.length > 0 || searchResults.links.length > 0) && sortDropdown}
+                </div>
                 
                 {searchResults.folders.length > 0 && (
                   <div className="mb-8">
                     <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Folders</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                      {searchResults.folders.map(folder => (
+                      {sortItems(searchResults.folders).map(folder => (
                         <FolderCard 
                           key={folder.id}
                           folder={folder}
@@ -2139,7 +2212,7 @@ export default function App() {
                   <div>
                     <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Items</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                      {searchResults.links.map(item => (
+                      {sortItems(searchResults.links).map(item => (
                         <LinkCard 
                           key={item.link.id} 
                           link={item.link} 
@@ -2170,7 +2243,10 @@ export default function App() {
                 {/* Folders Section */}
                 {(currentFolder.folders.length > 0 || currentFolderId !== 'root') && (
                   <div className="mb-8">
-                    <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Folders</h2>
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Folders</h2>
+                      {sortDropdown}
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                       {currentFolderId !== 'root' && (
                         <UpFolderCard 
@@ -2181,7 +2257,7 @@ export default function App() {
                           parentName={breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2].name : 'Root'}
                         />
                       )}
-                      {currentFolder.folders.map(folder => (
+                      {sortItems(currentFolder.folders).map(folder => (
                         <FolderCard 
                           key={folder.id}
                           folder={folder}
@@ -2201,9 +2277,12 @@ export default function App() {
                 {/* Items Section */}
                 {currentFolder.links.length > 0 && (
                   <div>
-                    <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Items</h2>
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Items</h2>
+                      {currentFolder.folders.length === 0 && currentFolderId === 'root' && sortDropdown}
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                      {currentFolder.links.map(link => (
+                      {sortItems(currentFolder.links).map(link => (
                         <LinkCard 
                           key={link.id} 
                           link={link} 
