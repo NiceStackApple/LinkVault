@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lvp-cache-v3';
+const CACHE_NAME = 'lvp-cache-v2';
 const urlsToCache = [
   '/',
   '/index.html',
