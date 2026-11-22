@@ -118,50 +118,65 @@ async function startServer() {
 
   // Management routes (authenticated via Firebase ID token or server-issued workspace session token)
   app.get('/api/mcp/tokens', async (req, res) => {
-    const caller = await verifyManagementCaller(req);
-    if (!caller) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+    try {
+      const caller = await verifyManagementCaller(req);
+      if (!caller) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const tokens = listMcpTokens(caller.workspaceId);
+      const { version, updatedAt } = getWorkspaceVault(caller.workspaceId);
+      const activity = listActivity(caller.workspaceId, 20);
+      res.json({ tokens, version, updatedAt, activity, authType: caller.authType });
+    } catch (err) {
+      console.error('[server] GET /api/mcp/tokens error:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal server error' });
     }
-    const tokens = listMcpTokens(caller.workspaceId);
-    const { version, updatedAt } = getWorkspaceVault(caller.workspaceId);
-    const activity = listActivity(caller.workspaceId, 20);
-    res.json({ tokens, version, updatedAt, activity, authType: caller.authType });
   });
 
   app.post('/api/mcp/tokens', async (req, res) => {
-    const caller = await verifyManagementCaller(req);
-    if (!caller) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+    try {
+      const caller = await verifyManagementCaller(req);
+      if (!caller) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const label = typeof req.body?.label === 'string' ? req.body.label : 'AI Agent';
+      const created = createMcpToken(caller.workspaceId, label);
+      res.status(201).json(created);
+    } catch (err) {
+      console.error('[server] POST /api/mcp/tokens error:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal server error' });
     }
-    const label = typeof req.body?.label === 'string' ? req.body.label : 'AI Agent';
-    const created = createMcpToken(caller.workspaceId, label);
-    res.status(201).json(created);
   });
 
   app.delete('/api/mcp/tokens/:id', async (req, res) => {
-    const caller = await verifyManagementCaller(req);
-    if (!caller) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+    try {
+      const caller = await verifyManagementCaller(req);
+      if (!caller) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const tokenId = typeof req.params.id === 'string' ? req.params.id : '';
+      const revoked = revokeMcpToken(caller.workspaceId, tokenId);
+      if (!revoked) {
+        res.status(404).json({ error: 'Token not found' });
+        return;
+      }
+      res.json({ revoked: true });
+    } catch (err) {
+      console.error('[server] DELETE /api/mcp/tokens/:id error:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal server error' });
     }
-    const tokenId = typeof req.params.id === 'string' ? req.params.id : '';
-    const revoked = revokeMcpToken(caller.workspaceId, tokenId);
-    if (!revoked) {
-      res.status(404).json({ error: 'Token not found' });
-      return;
-    }
-    res.json({ revoked: true });
   });
 
   app.post('/api/mcp/sync', async (req, res) => {
-    const caller = await verifyManagementCaller(req);
-    if (!caller) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
     try {
+      const caller = await verifyManagementCaller(req);
+      if (!caller) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
       const vault = validateVaultStructure(req.body?.vault);
       const expectedVersion =
         typeof req.body?.expectedVersion === 'number' ? req.body.expectedVersion : undefined;
@@ -184,27 +199,37 @@ async function startServer() {
   });
 
   app.get('/api/mcp/vault', async (req, res) => {
-    const caller = await verifyManagementCaller(req);
-    if (!caller) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+    try {
+      const caller = await verifyManagementCaller(req);
+      if (!caller) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const { vault, version, updatedAt } = getWorkspaceVault(caller.workspaceId);
+      const activity = listActivity(caller.workspaceId, 20);
+      res.json({ vault, version, updatedAt, activity });
+    } catch (err) {
+      console.error('[server] GET /api/mcp/vault error:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal server error' });
     }
-    const { vault, version, updatedAt } = getWorkspaceVault(caller.workspaceId);
-    const activity = listActivity(caller.workspaceId, 20);
-    res.json({ vault, version, updatedAt, activity });
   });
 
   // In-app MCP JSON-RPC playground (uses caller's authenticated workspace)
   app.post('/api/mcp/playground', async (req, res) => {
-    const caller = await verifyManagementCaller(req);
-    if (!caller) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+    try {
+      const caller = await verifyManagementCaller(req);
+      if (!caller) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const rpcResponse = handleSingleMcpMessage(caller.workspaceId, req.body);
+      const { version, updatedAt } = getWorkspaceVault(caller.workspaceId);
+      const activity = listActivity(caller.workspaceId, 20);
+      res.json({ response: rpcResponse, version, updatedAt, activity });
+    } catch (err) {
+      console.error('[server] POST /api/mcp/playground error:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal server error' });
     }
-    const rpcResponse = handleSingleMcpMessage(caller.workspaceId, req.body);
-    const { version, updatedAt } = getWorkspaceVault(caller.workspaceId);
-    const activity = listActivity(caller.workspaceId, 20);
-    res.json({ response: rpcResponse, version, updatedAt, activity });
   });
 
   if (!IS_PROD) {

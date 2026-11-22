@@ -22,7 +22,7 @@
   "rewrites": [
     {
       "source": "/api/mcp/(.*)",
-      "destination": "/api/mcp"
+      "destination": "/api/mcp?__path=$1"
     },
     {
       "source": "/mcp",
