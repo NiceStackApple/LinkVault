@@ -145,6 +145,7 @@ export const McpModal: React.FC<McpModalProps> = ({
   const [tokenLabel, setTokenLabel] = useState('AI Agent');
   const [creatingToken, setCreatingToken] = useState(false);
   const [newlyCreatedToken, setNewlyCreatedToken] = useState<string | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Playground state
@@ -174,12 +175,17 @@ export const McpModal: React.FC<McpModalProps> = ({
   const handleGenerateToken = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreatingToken(true);
+    setTokenError(null);
     try {
       const token = await onCreateToken(tokenLabel.trim() || 'AI Agent');
       if (token) {
         setNewlyCreatedToken(token);
         setTokenLabel('');
+      } else {
+        setTokenError('Token tidak diterima dari server. Silakan coba lagi.');
       }
+    } catch (err) {
+      setTokenError(err instanceof Error ? err.message : 'Gagal membuat MCP token.');
     } finally {
       setCreatingToken(false);
     }
@@ -596,6 +602,13 @@ export const McpModal: React.FC<McpModalProps> = ({
                     <span>{creatingToken ? 'Creating...' : 'Generate Token'}</span>
                   </button>
                 </form>
+
+                {tokenError && (
+                  <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-xs text-red-700">
+                    <AlertCircle size={15} className="text-red-500 flex-shrink-0 mt-0.5" />
+                    <span>{tokenError}</span>
+                  </div>
+                )}
 
                 {newlyCreatedToken && (
                   <div className="mb-3 p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl">

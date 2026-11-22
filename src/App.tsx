@@ -1311,28 +1311,80 @@ export default function App() {
     }
   }, [rootFolder, user, isSyncing]);
 
+  // Reset MCP state cleanly when switching between logged-out and logged-in accounts
+  useEffect(() => {
+    mcpSessionTokenRef.current = null;
+    mcpVaultVersionRef.current = 1;
+    mcpActiveRef.current = false;
+    setMcpTokens([]);
+    setMcpActivity([]);
+    setMcpVaultVersion(1);
+    setMcpLastSyncedAt(null);
+  }, [user?.uid]);
+
   // MCP Server authentication & two-way vault sync
-  const getMcpAuthHeaders = async (): Promise<Record<string, string>> => {
+  const getMcpAuthHeaders = async (forceRefresh = false): Promise<Record<string, string>> => {
     if (user) {
-      const idToken = await user.getIdToken();
+      const idToken = await user.getIdToken(forceRefresh);
       return { Authorization: `Bearer ${idToken}` };
     }
-    if (!mcpSessionTokenRef.current) {
+    if (forceRefresh || !mcpSessionTokenRef.current) {
       const res = await fetch('/api/mcp/workspace/session', { method: 'POST' });
-      if (!res.ok) throw new Error('Failed to initialize MCP workspace session');
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(
+          res.status === 404
+            ? 'MCP API endpoint (/api/mcp) is not reachable on this host.'
+            : `Failed to initialize MCP session (${res.status})${text ? `: ${text.slice(0, 120)}` : ''}`
+        );
+      }
       const data = await res.json();
       mcpSessionTokenRef.current = data.sessionToken;
     }
     return { Authorization: `Bearer ${mcpSessionTokenRef.current}` };
   };
 
+  const fetchWithMcpAuth = async (url: string, init: RequestInit = {}): Promise<Response> => {
+    const headers = await getMcpAuthHeaders(false);
+    let res = await fetch(url, {
+      ...init,
+      headers: { ...(init.headers as Record<string, string> | undefined), ...headers },
+    });
+    if (res.status === 401) {
+      const refreshedHeaders = await getMcpAuthHeaders(true);
+      res = await fetch(url, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string> | undefined), ...refreshedHeaders },
+      });
+    }
+    return res;
+  };
+
+  const parseMcpError = async (res: Response, fallback: string): Promise<string> => {
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        const body = await res.json();
+        if (body?.error) return String(body.error);
+      } catch {
+        // fallback below
+      }
+    }
+    if (res.status === 404) {
+      return 'MCP API endpoint not found (404). Make sure the server/serverless API is deployed.';
+    }
+    if (res.status === 401) {
+      return 'Authentication failed (401). Please sign out and sign in again, then retry.';
+    }
+    return `${fallback} (HTTP ${res.status})`;
+  };
+
   const syncVaultToMcp = async (vaultToSync: Folder, force = false) => {
     setIsSyncingMcp(true);
     try {
-      const headers = await getMcpAuthHeaders();
-      const res = await fetch('/api/mcp/sync', {
+      const res = await fetchWithMcpAuth('/api/mcp/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           vault: vaultToSync,
           expectedVersion: force ? undefined : mcpVaultVersionRef.current,
@@ -1367,15 +1419,14 @@ export default function App() {
 
   const refreshMcpStatus = async () => {
     try {
-      const headers = await getMcpAuthHeaders();
-      const res = await fetch('/api/mcp/tokens', { headers });
+      const res = await fetchWithMcpAuth('/api/mcp/tokens');
       if (res.ok) {
         const data = await res.json();
         setMcpTokens(data.tokens || []);
         setMcpActivity(data.activity || []);
         mcpActiveRef.current = true;
         if (data.version > mcpVaultVersionRef.current) {
-          const vaultRes = await fetch('/api/mcp/vault', { headers });
+          const vaultRes = await fetchWithMcpAuth('/api/mcp/vault');
           if (vaultRes.ok) {
             const vData = await vaultRes.json();
             if (vData.vault) {
@@ -1397,34 +1448,29 @@ export default function App() {
   };
 
   const handleCreateMcpToken = async (label: string): Promise<string | null> => {
-    try {
-      await syncVaultToMcp(rootFolder, true);
-      const headers = await getMcpAuthHeaders();
-      const res = await fetch('/api/mcp/tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify({ label }),
-      });
-      if (!res.ok) throw new Error('Failed to create MCP token');
-      const data = await res.json();
-      if (data.record) {
-        setMcpTokens((prev) => [data.record, ...prev]);
-      }
-      showToast('MCP access token created');
-      return data.token || null;
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to create MCP token', 'error');
-      return null;
+    await syncVaultToMcp(rootFolder, true);
+    const res = await fetchWithMcpAuth('/api/mcp/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label }),
+    });
+    if (!res.ok) {
+      const msg = await parseMcpError(res, 'Failed to create MCP token');
+      showToast(msg, 'error');
+      throw new Error(msg);
     }
+    const data = await res.json();
+    if (data.record) {
+      setMcpTokens((prev) => [data.record, ...prev]);
+    }
+    showToast('MCP access token created');
+    return data.token || null;
   };
 
   const handleRevokeMcpToken = async (id: string) => {
     try {
-      const headers = await getMcpAuthHeaders();
-      const res = await fetch(`/api/mcp/tokens/${encodeURIComponent(id)}`, {
+      const res = await fetchWithMcpAuth(`/api/mcp/tokens/${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers,
       });
       if (res.ok) {
         setMcpTokens((prev) => prev.filter((t) => t.id !== id));
@@ -1437,19 +1483,19 @@ export default function App() {
   };
 
   const handleRunMcpPlayground = async (payload: Record<string, unknown>) => {
-    const headers = await getMcpAuthHeaders();
-    const res = await fetch('/api/mcp/playground', {
+    const res = await fetchWithMcpAuth('/api/mcp/playground', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || 'MCP request failed');
+      const msg = await parseMcpError(res, 'MCP request failed');
+      throw new Error(msg);
     }
+    const data = await res.json();
     if (data.activity) setMcpActivity(data.activity);
     if (typeof data.version === 'number' && data.version > mcpVaultVersionRef.current) {
-      const vaultRes = await fetch('/api/mcp/vault', { headers });
+      const vaultRes = await fetchWithMcpAuth('/api/mcp/vault');
       if (vaultRes.ok) {
         const vData = await vaultRes.json();
         if (vData.vault) {
@@ -1479,8 +1525,7 @@ export default function App() {
     if (!isMcpModalOpen && mcpTokens.length === 0) return;
     const interval = setInterval(async () => {
       try {
-        const headers = await getMcpAuthHeaders();
-        const res = await fetch('/api/mcp/vault', { headers });
+        const res = await fetchWithMcpAuth('/api/mcp/vault');
         if (!res.ok) return;
         const data = await res.json();
         if (data.activity) setMcpActivity(data.activity);
@@ -1792,6 +1837,7 @@ export default function App() {
         if (importedData && importedData.id === 'root' && Array.isArray(importedData.folders)) {
           setRootFolder(importedData);
           setCurrentFolderId('root');
+          showToast("Backup imported successfully");
         } else {
           showToast("Invalid backup file format.", 'error');
         }
@@ -2144,31 +2190,29 @@ export default function App() {
               MCP
             </span>
           </button>
-          {!user && (
-            <div className="flex space-x-2">
-              <button 
-                onClick={handleExport}
-                className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
-              >
-                <Download size={16} />
-                <span>Export</span>
-              </button>
-              <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
-              >
-                <Upload size={16} />
-                <span>Import</span>
-              </button>
-              <input 
-                type="file" 
-                accept=".json" 
-                className="hidden" 
-                ref={fileInputRef}
-                onChange={handleImport}
-              />
-            </div>
-          )}
+          <div className="flex space-x-2">
+            <button 
+              onClick={handleExport}
+              className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
+            >
+              <Download size={16} />
+              <span>Export</span>
+            </button>
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
+            >
+              <Upload size={16} />
+              <span>Import</span>
+            </button>
+            <input 
+              type="file" 
+              accept=".json" 
+              className="hidden" 
+              ref={fileInputRef}
+              onChange={handleImport}
+            />
+          </div>
         </div>
       </aside>
 

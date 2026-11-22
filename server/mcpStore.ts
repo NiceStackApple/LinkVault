@@ -1,7 +1,8 @@
-import Database from 'better-sqlite3';
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { createRequire } from 'module';
 
 export type LinkType = 'youtube' | 'tiktok' | 'instagram' | 'general' | 'note';
 
@@ -47,54 +48,44 @@ export interface ActivityRecord {
   createdAt: number;
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+interface StoredWorkspaceRow {
+  vault_json: string;
+  version: number;
+  updated_at: number;
 }
 
-const DB_PATH = path.join(DATA_DIR, 'linkvault-mcp.db');
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+interface StoredTokenRow {
+  id: string;
+  workspace_id: string;
+  label: string;
+  token_hash: string;
+  token_prefix: string;
+  created_at: number;
+  last_used_at: number | null;
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS mcp_workspaces (
-    workspace_id TEXT PRIMARY KEY,
-    vault_json TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1,
-    updated_at INTEGER NOT NULL
-  );
+interface StoredSessionRow {
+  token_hash: string;
+  workspace_id: string;
+  created_at: number;
+  expires_at: number;
+}
 
-  CREATE TABLE IF NOT EXISTS mcp_tokens (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    label TEXT NOT NULL,
-    token_hash TEXT UNIQUE NOT NULL,
-    token_prefix TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    last_used_at INTEGER
-  );
+interface StoredActivityRow {
+  id: string;
+  workspace_id: string;
+  tool_name: string;
+  summary: string;
+  status: 'ok' | 'error';
+  created_at: number;
+}
 
-  CREATE INDEX IF NOT EXISTS idx_mcp_tokens_workspace ON mcp_tokens(workspace_id);
-
-  CREATE TABLE IF NOT EXISTS mcp_sessions (
-    token_hash TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS mcp_activity (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    status TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_mcp_activity_workspace ON mcp_activity(workspace_id, created_at DESC);
-`);
+interface JsonStoreShape {
+  workspaces: Record<string, StoredWorkspaceRow>;
+  tokens: StoredTokenRow[];
+  sessions: Record<string, StoredSessionRow>;
+  activity: StoredActivityRow[];
+}
 
 export const DEFAULT_VAULT: VaultFolder = {
   id: 'root',
@@ -102,6 +93,105 @@ export const DEFAULT_VAULT: VaultFolder = {
   folders: [],
   links: [],
 };
+
+function resolveStorageDir(): string {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    return path.join(os.tmpdir(), 'linkvault-mcp');
+  }
+  const localDir = path.join(process.cwd(), 'data');
+  try {
+    fs.mkdirSync(localDir, { recursive: true });
+    fs.accessSync(localDir, fs.constants.W_OK);
+    return localDir;
+  } catch {
+    const tmpDir = path.join(os.tmpdir(), 'linkvault-mcp');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    return tmpDir;
+  }
+}
+
+const STORAGE_DIR = resolveStorageDir();
+fs.mkdirSync(STORAGE_DIR, { recursive: true });
+
+// Attempt to initialize better-sqlite3; fall back seamlessly to atomic JSON store on serverless runtimes
+let sqliteDb: import('better-sqlite3').Database | null = null;
+const JSON_STORE_PATH = path.join(STORAGE_DIR, 'linkvault-mcp.json');
+
+try {
+  const req = createRequire(import.meta.url);
+  const Database = req('better-sqlite3') as typeof import('better-sqlite3');
+  const dbPath = path.join(STORAGE_DIR, 'linkvault-mcp.db');
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_workspaces (
+      workspace_id TEXT PRIMARY KEY,
+      vault_json TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mcp_tokens (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      token_hash TEXT UNIQUE NOT NULL,
+      token_prefix TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_used_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mcp_tokens_workspace ON mcp_tokens(workspace_id);
+
+    CREATE TABLE IF NOT EXISTS mcp_sessions (
+      token_hash TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mcp_activity (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mcp_activity_workspace ON mcp_activity(workspace_id, created_at DESC);
+  `);
+
+  sqliteDb = db;
+} catch (err) {
+  console.warn('[mcpStore] SQLite unavailable, using JSON file store fallback:', err instanceof Error ? err.message : err);
+  sqliteDb = null;
+}
+
+function readJsonStore(): JsonStoreShape {
+  try {
+    if (fs.existsSync(JSON_STORE_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(JSON_STORE_PATH, 'utf8')) as Partial<JsonStoreShape>;
+      return {
+        workspaces: parsed.workspaces || {},
+        tokens: Array.isArray(parsed.tokens) ? parsed.tokens : [],
+        sessions: parsed.sessions || {},
+        activity: Array.isArray(parsed.activity) ? parsed.activity : [],
+      };
+    }
+  } catch {
+    // ignore corrupt fallback file
+  }
+  return { workspaces: {}, tokens: [], sessions: {}, activity: [] };
+}
+
+function writeJsonStore(data: JsonStoreShape): void {
+  const tmpPath = `${JSON_STORE_PATH}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data), 'utf8');
+  fs.renameSync(tmpPath, JSON_STORE_PATH);
+}
 
 export function hashSecret(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex');
@@ -157,24 +247,40 @@ export function validateVaultStructure(input: unknown): VaultFolder {
 }
 
 export function getWorkspaceVault(workspaceId: string): { vault: VaultFolder; version: number; updatedAt: number } {
-  const row = db
-    .prepare('SELECT vault_json, version, updated_at FROM mcp_workspaces WHERE workspace_id = ?')
-    .get(workspaceId) as { vault_json: string; version: number; updated_at: number } | undefined;
+  if (sqliteDb) {
+    const row = sqliteDb
+      .prepare('SELECT vault_json, version, updated_at FROM mcp_workspaces WHERE workspace_id = ?')
+      .get(workspaceId) as StoredWorkspaceRow | undefined;
 
-  if (!row) {
-    const now = Date.now();
-    db.prepare(
-      'INSERT OR IGNORE INTO mcp_workspaces (workspace_id, vault_json, version, updated_at) VALUES (?, ?, ?, ?)'
-    ).run(workspaceId, JSON.stringify(DEFAULT_VAULT), 1, now);
-    return { vault: structuredClone(DEFAULT_VAULT), version: 1, updatedAt: now };
+    if (!row) {
+      const now = Date.now();
+      sqliteDb
+        .prepare('INSERT OR IGNORE INTO mcp_workspaces (workspace_id, vault_json, version, updated_at) VALUES (?, ?, ?, ?)')
+        .run(workspaceId, JSON.stringify(DEFAULT_VAULT), 1, now);
+      return { vault: structuredClone(DEFAULT_VAULT), version: 1, updatedAt: now };
+    }
+
+    try {
+      return {
+        vault: JSON.parse(row.vault_json) as VaultFolder,
+        version: row.version,
+        updatedAt: row.updated_at,
+      };
+    } catch {
+      return { vault: structuredClone(DEFAULT_VAULT), version: row.version, updatedAt: row.updated_at };
+    }
   }
 
+  const store = readJsonStore();
+  const row = store.workspaces[workspaceId];
+  if (!row) {
+    const now = Date.now();
+    store.workspaces[workspaceId] = { vault_json: JSON.stringify(DEFAULT_VAULT), version: 1, updated_at: now };
+    writeJsonStore(store);
+    return { vault: structuredClone(DEFAULT_VAULT), version: 1, updatedAt: now };
+  }
   try {
-    return {
-      vault: JSON.parse(row.vault_json) as VaultFolder,
-      version: row.version,
-      updatedAt: row.updated_at,
-    };
+    return { vault: JSON.parse(row.vault_json) as VaultFolder, version: row.version, updatedAt: row.updated_at };
   } catch {
     return { vault: structuredClone(DEFAULT_VAULT), version: row.version, updatedAt: row.updated_at };
   }
@@ -186,17 +292,41 @@ export function saveWorkspaceVault(
   options?: { expectedVersion?: number; force?: boolean }
 ): { version: number; updatedAt: number; conflict: boolean } {
   const now = Date.now();
-  const existing = db
-    .prepare('SELECT version, updated_at FROM mcp_workspaces WHERE workspace_id = ?')
-    .get(workspaceId) as { version: number; updated_at: number } | undefined;
+  if (sqliteDb) {
+    const existing = sqliteDb
+      .prepare('SELECT version, updated_at FROM mcp_workspaces WHERE workspace_id = ?')
+      .get(workspaceId) as { version: number; updated_at: number } | undefined;
 
-  if (!existing) {
-    db.prepare(
-      'INSERT INTO mcp_workspaces (workspace_id, vault_json, version, updated_at) VALUES (?, ?, ?, ?)'
-    ).run(workspaceId, JSON.stringify(vault), 1, now);
-    return { version: 1, updatedAt: now, conflict: false };
+    if (!existing) {
+      sqliteDb
+        .prepare('INSERT INTO mcp_workspaces (workspace_id, vault_json, version, updated_at) VALUES (?, ?, ?, ?)')
+        .run(workspaceId, JSON.stringify(vault), 1, now);
+      return { version: 1, updatedAt: now, conflict: false };
+    }
+
+    if (
+      !options?.force &&
+      typeof options?.expectedVersion === 'number' &&
+      options.expectedVersion !== existing.version
+    ) {
+      return { version: existing.version, updatedAt: existing.updated_at, conflict: true };
+    }
+
+    const nextVersion = existing.version + 1;
+    sqliteDb
+      .prepare('UPDATE mcp_workspaces SET vault_json = ?, version = ?, updated_at = ? WHERE workspace_id = ?')
+      .run(JSON.stringify(vault), nextVersion, now, workspaceId);
+
+    return { version: nextVersion, updatedAt: now, conflict: false };
   }
 
+  const store = readJsonStore();
+  const existing = store.workspaces[workspaceId];
+  if (!existing) {
+    store.workspaces[workspaceId] = { vault_json: JSON.stringify(vault), version: 1, updated_at: now };
+    writeJsonStore(store);
+    return { version: 1, updatedAt: now, conflict: false };
+  }
   if (
     !options?.force &&
     typeof options?.expectedVersion === 'number' &&
@@ -204,12 +334,9 @@ export function saveWorkspaceVault(
   ) {
     return { version: existing.version, updatedAt: existing.updated_at, conflict: true };
   }
-
   const nextVersion = existing.version + 1;
-  db.prepare(
-    'UPDATE mcp_workspaces SET vault_json = ?, version = ?, updated_at = ? WHERE workspace_id = ?'
-  ).run(JSON.stringify(vault), nextVersion, now, workspaceId);
-
+  store.workspaces[workspaceId] = { vault_json: JSON.stringify(vault), version: nextVersion, updated_at: now };
+  writeJsonStore(store);
   return { version: nextVersion, updatedAt: now, conflict: false };
 }
 
@@ -221,9 +348,25 @@ export function createMcpToken(workspaceId: string, label: string): { token: str
   const id = generateId('tok');
   const now = Date.now();
 
-  db.prepare(
-    'INSERT INTO mcp_tokens (id, workspace_id, label, token_hash, token_prefix, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, NULL)'
-  ).run(id, workspaceId, cleanLabel, tokenHash, tokenPrefix, now);
+  if (sqliteDb) {
+    sqliteDb
+      .prepare(
+        'INSERT INTO mcp_tokens (id, workspace_id, label, token_hash, token_prefix, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, NULL)'
+      )
+      .run(id, workspaceId, cleanLabel, tokenHash, tokenPrefix, now);
+  } else {
+    const store = readJsonStore();
+    store.tokens.unshift({
+      id,
+      workspace_id: workspaceId,
+      label: cleanLabel,
+      token_hash: tokenHash,
+      token_prefix: tokenPrefix,
+      created_at: now,
+      last_used_at: null,
+    });
+    writeJsonStore(store);
+  }
 
   return {
     token: rawToken,
@@ -238,50 +381,88 @@ export function createMcpToken(workspaceId: string, label: string): { token: str
 }
 
 export function listMcpTokens(workspaceId: string): TokenRecord[] {
-  const rows = db
-    .prepare(
-      'SELECT id, label, token_prefix, created_at, last_used_at FROM mcp_tokens WHERE workspace_id = ? ORDER BY created_at DESC'
-    )
-    .all(workspaceId) as Array<{
-    id: string;
-    label: string;
-    token_prefix: string;
-    created_at: number;
-    last_used_at: number | null;
-  }>;
+  if (sqliteDb) {
+    const rows = sqliteDb
+      .prepare(
+        'SELECT id, label, token_prefix, created_at, last_used_at FROM mcp_tokens WHERE workspace_id = ? ORDER BY created_at DESC'
+      )
+      .all(workspaceId) as Array<{
+      id: string;
+      label: string;
+      token_prefix: string;
+      created_at: number;
+      last_used_at: number | null;
+    }>;
 
-  return rows.map((r) => ({
-    id: r.id,
-    label: r.label,
-    tokenPrefix: r.token_prefix,
-    createdAt: r.created_at,
-    lastUsedAt: r.last_used_at,
-  }));
+    return rows.map((r) => ({
+      id: r.id,
+      label: r.label,
+      tokenPrefix: r.token_prefix,
+      createdAt: r.created_at,
+      lastUsedAt: r.last_used_at,
+    }));
+  }
+
+  const store = readJsonStore();
+  return store.tokens
+    .filter((t) => t.workspace_id === workspaceId)
+    .sort((a, b) => b.created_at - a.created_at)
+    .map((r) => ({
+      id: r.id,
+      label: r.label,
+      tokenPrefix: r.token_prefix,
+      createdAt: r.created_at,
+      lastUsedAt: r.last_used_at,
+    }));
 }
 
 export function revokeMcpToken(workspaceId: string, tokenId: string): boolean {
-  const res = db
-    .prepare('DELETE FROM mcp_tokens WHERE id = ? AND workspace_id = ?')
-    .run(tokenId, workspaceId);
-  return res.changes > 0;
+  if (sqliteDb) {
+    const res = sqliteDb
+      .prepare('DELETE FROM mcp_tokens WHERE id = ? AND workspace_id = ?')
+      .run(tokenId, workspaceId);
+    return res.changes > 0;
+  }
+
+  const store = readJsonStore();
+  const before = store.tokens.length;
+  store.tokens = store.tokens.filter((t) => !(t.id === tokenId && t.workspace_id === workspaceId));
+  if (store.tokens.length !== before) {
+    writeJsonStore(store);
+    return true;
+  }
+  return false;
 }
 
 export function verifyMcpApiToken(rawToken: string): { workspaceId: string; tokenId: string; label: string } | null {
   if (!rawToken || !rawToken.startsWith('lvp_')) return null;
   const candidateHash = hashSecret(rawToken);
-  const row = db
-    .prepare('SELECT id, workspace_id, label, token_hash FROM mcp_tokens WHERE token_hash = ?')
-    .get(candidateHash) as { id: string; workspace_id: string; label: string; token_hash: string } | undefined;
-
-  if (!row) return null;
-
   const a = Buffer.from(candidateHash, 'hex');
-  const b = Buffer.from(row.token_hash, 'hex');
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    return null;
+
+  if (sqliteDb) {
+    const row = sqliteDb
+      .prepare('SELECT id, workspace_id, label, token_hash FROM mcp_tokens WHERE token_hash = ?')
+      .get(candidateHash) as { id: string; workspace_id: string; label: string; token_hash: string } | undefined;
+
+    if (!row) return null;
+
+    const b = Buffer.from(row.token_hash, 'hex');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return null;
+    }
+
+    sqliteDb.prepare('UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?').run(Date.now(), row.id);
+    return { workspaceId: row.workspace_id, tokenId: row.id, label: row.label };
   }
 
-  db.prepare('UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?').run(Date.now(), row.id);
+  const store = readJsonStore();
+  const row = store.tokens.find((t) => {
+    const b = Buffer.from(t.token_hash, 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  });
+  if (!row) return null;
+  row.last_used_at = Date.now();
+  writeJsonStore(store);
   return { workspaceId: row.workspace_id, tokenId: row.id, label: row.label };
 }
 
@@ -292,9 +473,15 @@ export function createAnonymousSession(): { sessionToken: string; workspaceId: s
   const now = Date.now();
   const expiresAt = now + 7 * 24 * 60 * 60 * 1000;
 
-  db.prepare(
-    'INSERT INTO mcp_sessions (token_hash, workspace_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
-  ).run(tokenHash, workspaceId, now, expiresAt);
+  if (sqliteDb) {
+    sqliteDb
+      .prepare('INSERT INTO mcp_sessions (token_hash, workspace_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+      .run(tokenHash, workspaceId, now, expiresAt);
+  } else {
+    const store = readJsonStore();
+    store.sessions[tokenHash] = { token_hash: tokenHash, workspace_id: workspaceId, created_at: now, expires_at: expiresAt };
+    writeJsonStore(store);
+  }
 
   return { sessionToken, workspaceId };
 }
@@ -302,13 +489,26 @@ export function createAnonymousSession(): { sessionToken: string; workspaceId: s
 export function verifyAnonymousSession(sessionToken: string): string | null {
   if (!sessionToken || !sessionToken.startsWith('lvps_')) return null;
   const candidateHash = hashSecret(sessionToken);
-  const row = db
-    .prepare('SELECT workspace_id, expires_at FROM mcp_sessions WHERE token_hash = ?')
-    .get(candidateHash) as { workspace_id: string; expires_at: number } | undefined;
 
+  if (sqliteDb) {
+    const row = sqliteDb
+      .prepare('SELECT workspace_id, expires_at FROM mcp_sessions WHERE token_hash = ?')
+      .get(candidateHash) as { workspace_id: string; expires_at: number } | undefined;
+
+    if (!row) return null;
+    if (row.expires_at < Date.now()) {
+      sqliteDb.prepare('DELETE FROM mcp_sessions WHERE token_hash = ?').run(candidateHash);
+      return null;
+    }
+    return row.workspace_id;
+  }
+
+  const store = readJsonStore();
+  const row = store.sessions[candidateHash];
   if (!row) return null;
   if (row.expires_at < Date.now()) {
-    db.prepare('DELETE FROM mcp_sessions WHERE token_hash = ?').run(candidateHash);
+    delete store.sessions[candidateHash];
+    writeJsonStore(store);
     return null;
   }
   return row.workspace_id;
@@ -322,39 +522,76 @@ export function recordActivity(
 ): void {
   const id = generateId('act');
   const now = Date.now();
-  db.prepare(
-    'INSERT INTO mcp_activity (id, workspace_id, tool_name, summary, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, workspaceId, toolName.slice(0, 64), summary.slice(0, 240), status, now);
+  if (sqliteDb) {
+    sqliteDb
+      .prepare(
+        'INSERT INTO mcp_activity (id, workspace_id, tool_name, summary, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(id, workspaceId, toolName.slice(0, 64), summary.slice(0, 240), status, now);
 
-  // Keep only latest 50 activity rows per workspace
-  db.prepare(
-    `DELETE FROM mcp_activity WHERE workspace_id = ? AND id NOT IN (
-      SELECT id FROM mcp_activity WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 50
-    )`
-  ).run(workspaceId, workspaceId);
+    sqliteDb
+      .prepare(
+        `DELETE FROM mcp_activity WHERE workspace_id = ? AND id NOT IN (
+          SELECT id FROM mcp_activity WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 50
+        )`
+      )
+      .run(workspaceId, workspaceId);
+    return;
+  }
+
+  const store = readJsonStore();
+  store.activity.unshift({
+    id,
+    workspace_id: workspaceId,
+    tool_name: toolName.slice(0, 64),
+    summary: summary.slice(0, 240),
+    status,
+    created_at: now,
+  });
+  let count = 0;
+  store.activity = store.activity.filter((row) => {
+    if (row.workspace_id !== workspaceId) return true;
+    count++;
+    return count <= 50;
+  });
+  writeJsonStore(store);
 }
 
 export function listActivity(workspaceId: string, limit = 20): ActivityRecord[] {
   const safeLimit = Math.max(1, Math.min(50, limit));
-  const rows = db
-    .prepare(
-      'SELECT id, tool_name, summary, status, created_at FROM mcp_activity WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?'
-    )
-    .all(workspaceId, safeLimit) as Array<{
-    id: string;
-    tool_name: string;
-    summary: string;
-    status: 'ok' | 'error';
-    created_at: number;
-  }>;
+  if (sqliteDb) {
+    const rows = sqliteDb
+      .prepare(
+        'SELECT id, tool_name, summary, status, created_at FROM mcp_activity WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?'
+      )
+      .all(workspaceId, safeLimit) as Array<{
+      id: string;
+      tool_name: string;
+      summary: string;
+      status: 'ok' | 'error';
+      created_at: number;
+    }>;
 
-  return rows.map((r) => ({
-    id: r.id,
-    toolName: r.tool_name,
-    summary: r.summary,
-    status: r.status,
-    createdAt: r.created_at,
-  }));
+    return rows.map((r) => ({
+      id: r.id,
+      toolName: r.tool_name,
+      summary: r.summary,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
+  }
+
+  const store = readJsonStore();
+  return store.activity
+    .filter((r) => r.workspace_id === workspaceId)
+    .slice(0, safeLimit)
+    .map((r) => ({
+      id: r.id,
+      toolName: r.tool_name,
+      summary: r.summary,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
 }
 
 // Vault Tree Helpers

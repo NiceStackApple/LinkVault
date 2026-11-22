@@ -1,10 +1,12 @@
 import crypto from 'crypto';
-import type { Request } from 'express';
+import type { IncomingMessage } from 'http';
 import { verifyAnonymousSession, verifyMcpApiToken } from './mcpStore';
 
 const FIREBASE_PROJECT_ID = 'linkvaultpro';
 const FIREBASE_JWKS_URL =
   'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
+const FIREBASE_X509_URL =
+  'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
 
 interface JwkKey {
   kid: string;
@@ -14,29 +16,57 @@ interface JwkKey {
   e?: string;
 }
 
-let cachedJwks: { keys: Map<string, JwkKey>; expiresAt: number } | null = null;
+let cachedKeys: { keys: Map<string, crypto.KeyObject>; expiresAt: number } | null = null;
+
+async function fetchFirebasePublicKeys(): Promise<{ keys: Map<string, crypto.KeyObject>; ttlMs: number }> {
+  // Primary: JWKS endpoint
+  try {
+    const res = await fetch(FIREBASE_JWKS_URL);
+    if (res.ok) {
+      const cacheControl = res.headers.get('cache-control') || '';
+      const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+      const ttlMs = maxAgeMatch ? Number(maxAgeMatch[1]) * 1000 : 3600 * 1000;
+      const data = (await res.json()) as { keys?: JwkKey[] };
+      const map = new Map<string, crypto.KeyObject>();
+      for (const key of data.keys || []) {
+        if (key.kid) {
+          map.set(
+            key.kid,
+            crypto.createPublicKey({ key: key as unknown as crypto.JsonWebKey, format: 'jwk' })
+          );
+        }
+      }
+      if (map.size > 0) {
+        return { keys: map, ttlMs: Math.min(ttlMs, 6 * 3600 * 1000) };
+      }
+    }
+  } catch (err) {
+    console.warn('[auth] JWKS fetch failed, falling back to x509:', err instanceof Error ? err.message : err);
+  }
+
+  // Fallback: x509 PEM certificates endpoint
+  const certRes = await fetch(FIREBASE_X509_URL);
+  if (!certRes.ok) {
+    throw new Error(`Failed to fetch Firebase public certificates: ${certRes.status}`);
+  }
+  const cacheControl = certRes.headers.get('cache-control') || '';
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+  const ttlMs = maxAgeMatch ? Number(maxAgeMatch[1]) * 1000 : 3600 * 1000;
+  const certs = (await certRes.json()) as Record<string, string>;
+  const map = new Map<string, crypto.KeyObject>();
+  for (const [kid, pem] of Object.entries(certs)) {
+    map.set(kid, crypto.createPublicKey(pem));
+  }
+  return { keys: map, ttlMs: Math.min(ttlMs, 6 * 3600 * 1000) };
+}
 
 async function getFirebasePublicKey(kid: string): Promise<crypto.KeyObject | null> {
   const now = Date.now();
-  if (!cachedJwks || cachedJwks.expiresAt <= now || !cachedJwks.keys.has(kid)) {
-    const res = await fetch(FIREBASE_JWKS_URL);
-    if (!res.ok) {
-      throw new Error(`Failed to fetch Firebase JWKS: ${res.status}`);
-    }
-    const cacheControl = res.headers.get('cache-control') || '';
-    const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
-    const ttlMs = maxAgeMatch ? Number(maxAgeMatch[1]) * 1000 : 3600 * 1000;
-    const data = (await res.json()) as { keys?: JwkKey[] };
-    const map = new Map<string, JwkKey>();
-    for (const key of data.keys || []) {
-      if (key.kid) map.set(key.kid, key);
-    }
-    cachedJwks = { keys: map, expiresAt: now + Math.min(ttlMs, 6 * 3600 * 1000) };
+  if (!cachedKeys || cachedKeys.expiresAt <= now || !cachedKeys.keys.has(kid)) {
+    const fetched = await fetchFirebasePublicKeys();
+    cachedKeys = { keys: fetched.keys, expiresAt: now + fetched.ttlMs };
   }
-
-  const jwk = cachedJwks.keys.get(kid);
-  if (!jwk) return null;
-  return crypto.createPublicKey({ key: jwk as unknown as crypto.JsonWebKey, format: 'jwk' });
+  return cachedKeys.keys.get(kid) || null;
 }
 
 function base64UrlDecodeToBuffer(str: string): Buffer {
@@ -54,7 +84,10 @@ export async function verifyFirebaseIdToken(token: string): Promise<{ uid: strin
       alg?: string;
       kid?: string;
     };
-    if (header.alg !== 'RS256' || !header.kid) return null;
+    if (header.alg !== 'RS256' || !header.kid) {
+      console.warn('[auth] Rejected token: invalid header alg/kid');
+      return null;
+    }
 
     const payload = JSON.parse(base64UrlDecodeToBuffer(encodedPayload).toString('utf8')) as {
       aud?: string;
@@ -66,30 +99,53 @@ export async function verifyFirebaseIdToken(token: string): Promise<{ uid: strin
     };
 
     const nowSec = Math.floor(Date.now() / 1000);
-    if (payload.aud !== FIREBASE_PROJECT_ID) return null;
-    if (payload.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`) return null;
-    if (!payload.sub || typeof payload.sub !== 'string') return null;
-    if (!payload.exp || payload.exp <= nowSec) return null;
-    if (payload.iat && payload.iat > nowSec + 300) return null;
+    if (payload.aud !== FIREBASE_PROJECT_ID) {
+      console.warn('[auth] Rejected token: aud mismatch');
+      return null;
+    }
+    if (payload.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`) {
+      console.warn('[auth] Rejected token: iss mismatch');
+      return null;
+    }
+    if (!payload.sub || typeof payload.sub !== 'string') {
+      console.warn('[auth] Rejected token: missing sub');
+      return null;
+    }
+    if (!payload.exp || payload.exp <= nowSec - 60) {
+      console.warn('[auth] Rejected token: expired');
+      return null;
+    }
+    if (payload.iat && payload.iat > nowSec + 600) {
+      console.warn('[auth] Rejected token: issued in the future');
+      return null;
+    }
 
     const publicKey = await getFirebasePublicKey(header.kid);
-    if (!publicKey) return null;
+    if (!publicKey) {
+      console.warn('[auth] Rejected token: unknown signing key');
+      return null;
+    }
 
     const signingInput = Buffer.from(`${encodedHeader}.${encodedPayload}`, 'utf8');
     const signature = base64UrlDecodeToBuffer(encodedSig);
     const isValid = crypto.verify('RSA-SHA256', signingInput, publicKey, signature);
-    if (!isValid) return null;
+    if (!isValid) {
+      console.warn('[auth] Rejected token: signature invalid');
+      return null;
+    }
 
     return { uid: payload.sub, email: payload.email };
-  } catch {
+  } catch (err) {
+    console.warn('[auth] Token verification error:', err instanceof Error ? err.message : err);
     return null;
   }
 }
 
-export function extractBearerToken(req: Request): string | null {
+export function extractBearerToken(req: Pick<IncomingMessage, 'headers'>): string | null {
   const authHeader = req.headers.authorization;
-  if (!authHeader || typeof authHeader !== 'string') return null;
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  const headerStr = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+  if (!headerStr || typeof headerStr !== 'string') return null;
+  const match = headerStr.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : null;
 }
 
@@ -99,7 +155,9 @@ export interface VerifiedManagementCaller {
   uid?: string;
 }
 
-export async function verifyManagementCaller(req: Request): Promise<VerifiedManagementCaller | null> {
+export async function verifyManagementCaller(
+  req: Pick<IncomingMessage, 'headers'>
+): Promise<VerifiedManagementCaller | null> {
   const token = extractBearerToken(req);
   if (!token) return null;
 
@@ -114,7 +172,9 @@ export async function verifyManagementCaller(req: Request): Promise<VerifiedMana
   return { workspaceId: `fb:${fb.uid}`, authType: 'firebase', uid: fb.uid };
 }
 
-export function verifyMcpAgentCaller(req: Request): { workspaceId: string; tokenId: string; label: string } | null {
+export function verifyMcpAgentCaller(
+  req: Pick<IncomingMessage, 'headers'>
+): { workspaceId: string; tokenId: string; label: string } | null {
   const token = extractBearerToken(req);
   if (!token) return null;
   return verifyMcpApiToken(token);
