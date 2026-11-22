@@ -21,7 +21,7 @@
   ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!api/|mcp|assets/|favicon\\.png|icon-.*\\.png|manifest\\.json|sw\\.js).*)",
       "destination": "/index.html"
     }
   ]

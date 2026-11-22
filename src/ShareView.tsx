@@ -5,7 +5,6 @@ import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { Folder, buildTree } from './sync';
 import { Globe, Folder as FolderIcon, ExternalLink, FileText, ChevronRight, ChevronDown, X, Check, Copy, ArrowUp, Link as LinkIcon, ArrowUpDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { faviconBase64 } from './faviconBase64';
 
 const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> = ({ link, onOpenNote }) => {
   const [copied, setCopied] = useState(false);

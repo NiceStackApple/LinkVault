@@ -35,7 +35,8 @@ import {
   LogOut,
   RefreshCw,
   ArrowUp,
-  ArrowUpDown
+  ArrowUpDown,
+  Cpu
 } from 'lucide-react';
 
 import { auth, googleProvider, db } from './firebase';
@@ -44,6 +45,8 @@ import { doc, setDoc, deleteDoc, collection, getDocs, query, where, writeBatch }
 import { syncToFirestore, fetchFromFirestore } from './sync';
 import ShareView from './ShareView';
 import { motion, AnimatePresence } from 'motion/react';
+import { BrandLogo } from './components/BrandLogo';
+import { McpModal, McpTokenInfo, McpActivityItem } from './components/McpModal';
 
 type LinkType = 'youtube' | 'tiktok' | 'instagram' | 'general' | 'note';
 
@@ -1038,6 +1041,16 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
+  const [mcpTokens, setMcpTokens] = useState<McpTokenInfo[]>([]);
+  const [mcpActivity, setMcpActivity] = useState<McpActivityItem[]>([]);
+  const [mcpVaultVersion, setMcpVaultVersion] = useState<number>(1);
+  const [mcpLastSyncedAt, setMcpLastSyncedAt] = useState<number | null>(null);
+  const [isSyncingMcp, setIsSyncingMcp] = useState(false);
+  const mcpSessionTokenRef = useRef<string | null>(null);
+  const mcpVaultVersionRef = useRef<number>(1);
+  const mcpActiveRef = useRef<boolean>(false);
+  const isApplyingRemoteMcpRef = useRef<boolean>(false);
   const [isDeleteAccountModalOpen, setIsDeleteAccountModalOpen] = useState(false);
   const [isFabOpen, setIsFabOpen] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
@@ -1297,6 +1310,195 @@ export default function App() {
       localStorage.setItem('linkvault_backup', JSON.stringify(rootFolder));
     }
   }, [rootFolder, user, isSyncing]);
+
+  // MCP Server authentication & two-way vault sync
+  const getMcpAuthHeaders = async (): Promise<Record<string, string>> => {
+    if (user) {
+      const idToken = await user.getIdToken();
+      return { Authorization: `Bearer ${idToken}` };
+    }
+    if (!mcpSessionTokenRef.current) {
+      const res = await fetch('/api/mcp/workspace/session', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to initialize MCP workspace session');
+      const data = await res.json();
+      mcpSessionTokenRef.current = data.sessionToken;
+    }
+    return { Authorization: `Bearer ${mcpSessionTokenRef.current}` };
+  };
+
+  const syncVaultToMcp = async (vaultToSync: Folder, force = false) => {
+    setIsSyncingMcp(true);
+    try {
+      const headers = await getMcpAuthHeaders();
+      const res = await fetch('/api/mcp/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({
+          vault: vaultToSync,
+          expectedVersion: force ? undefined : mcpVaultVersionRef.current,
+          force,
+        }),
+      });
+      if (res.status === 409) {
+        const conflictData = await res.json();
+        if (conflictData.vault) {
+          isApplyingRemoteMcpRef.current = true;
+          mcpVaultVersionRef.current = conflictData.version;
+          setMcpVaultVersion(conflictData.version);
+          setMcpLastSyncedAt(conflictData.updatedAt);
+          setRootFolder(conflictData.vault);
+          setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 100);
+        }
+        return;
+      }
+      if (res.ok) {
+        const data = await res.json();
+        mcpVaultVersionRef.current = data.version;
+        setMcpVaultVersion(data.version);
+        setMcpLastSyncedAt(data.updatedAt);
+        mcpActiveRef.current = true;
+      }
+    } catch (err) {
+      console.error('MCP sync error:', err);
+    } finally {
+      setIsSyncingMcp(false);
+    }
+  };
+
+  const refreshMcpStatus = async () => {
+    try {
+      const headers = await getMcpAuthHeaders();
+      const res = await fetch('/api/mcp/tokens', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setMcpTokens(data.tokens || []);
+        setMcpActivity(data.activity || []);
+        mcpActiveRef.current = true;
+        if (data.version > mcpVaultVersionRef.current) {
+          const vaultRes = await fetch('/api/mcp/vault', { headers });
+          if (vaultRes.ok) {
+            const vData = await vaultRes.json();
+            if (vData.vault) {
+              isApplyingRemoteMcpRef.current = true;
+              mcpVaultVersionRef.current = vData.version;
+              setMcpVaultVersion(vData.version);
+              setMcpLastSyncedAt(vData.updatedAt);
+              setRootFolder(vData.vault);
+              setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 100);
+            }
+          }
+        } else {
+          await syncVaultToMcp(rootFolder, true);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to refresh MCP status:', err);
+    }
+  };
+
+  const handleCreateMcpToken = async (label: string): Promise<string | null> => {
+    try {
+      await syncVaultToMcp(rootFolder, true);
+      const headers = await getMcpAuthHeaders();
+      const res = await fetch('/api/mcp/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ label }),
+      });
+      if (!res.ok) throw new Error('Failed to create MCP token');
+      const data = await res.json();
+      if (data.record) {
+        setMcpTokens((prev) => [data.record, ...prev]);
+      }
+      showToast('MCP access token created');
+      return data.token || null;
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to create MCP token', 'error');
+      return null;
+    }
+  };
+
+  const handleRevokeMcpToken = async (id: string) => {
+    try {
+      const headers = await getMcpAuthHeaders();
+      const res = await fetch(`/api/mcp/tokens/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers,
+      });
+      if (res.ok) {
+        setMcpTokens((prev) => prev.filter((t) => t.id !== id));
+        showToast('MCP token revoked');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to revoke token', 'error');
+    }
+  };
+
+  const handleRunMcpPlayground = async (payload: Record<string, unknown>) => {
+    const headers = await getMcpAuthHeaders();
+    const res = await fetch('/api/mcp/playground', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'MCP request failed');
+    }
+    if (data.activity) setMcpActivity(data.activity);
+    if (typeof data.version === 'number' && data.version > mcpVaultVersionRef.current) {
+      const vaultRes = await fetch('/api/mcp/vault', { headers });
+      if (vaultRes.ok) {
+        const vData = await vaultRes.json();
+        if (vData.vault) {
+          isApplyingRemoteMcpRef.current = true;
+          mcpVaultVersionRef.current = vData.version;
+          setMcpVaultVersion(vData.version);
+          setMcpLastSyncedAt(vData.updatedAt);
+          setRootFolder(vData.vault);
+          setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 100);
+        }
+      }
+    }
+    return data.response;
+  };
+
+  // Push local vault changes to MCP server whenever active
+  useEffect(() => {
+    if (!mcpActiveRef.current || isApplyingRemoteMcpRef.current || isSyncing) return;
+    const timer = setTimeout(() => {
+      syncVaultToMcp(rootFolder, true);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [rootFolder, user, isSyncing]);
+
+  // Poll MCP server for external AI agent updates
+  useEffect(() => {
+    if (!isMcpModalOpen && mcpTokens.length === 0) return;
+    const interval = setInterval(async () => {
+      try {
+        const headers = await getMcpAuthHeaders();
+        const res = await fetch('/api/mcp/vault', { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.activity) setMcpActivity(data.activity);
+        if (typeof data.version === 'number' && data.version > mcpVaultVersionRef.current && data.vault) {
+          isApplyingRemoteMcpRef.current = true;
+          mcpVaultVersionRef.current = data.version;
+          setMcpVaultVersion(data.version);
+          setMcpLastSyncedAt(data.updatedAt);
+          setRootFolder(data.vault);
+          showToast('Vault updated by AI Agent via MCP');
+          setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 100);
+        }
+      } catch {
+        // Ignore transient polling failures
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isMcpModalOpen, mcpTokens.length, user]);
 
   // Disable bulk mode when no items are selected
   useEffect(() => {
@@ -1824,8 +2026,8 @@ export default function App() {
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
         <div className="p-5 border-b border-slate-200/60 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <img src="/favicon.png" alt="LinkVaultPro Logo" className="w-8 h-8 rounded-lg" />
+          <div className="flex items-center space-x-2.5">
+            <BrandLogo className="w-8 h-8 rounded-lg flex-shrink-0 shadow-xs" />
             <h1 className="text-xl font-bold tracking-tight text-black">LinkVault<span className="font-normal">Pro</span></h1>
           </div>
           <button className="lg:hidden text-slate-500 hover:text-slate-800" onClick={() => setIsSidebarOpen(false)}>
@@ -1925,8 +2127,24 @@ export default function App() {
           )}
         </div>
 
-        {!user && (
-          <div className="p-4 border-t border-slate-200/60 bg-slate-50/50">
+        <div className="p-4 border-t border-slate-200/60 bg-slate-50/50 space-y-2">
+          <button
+            onClick={() => {
+              setIsMcpModalOpen(true);
+              setIsSidebarOpen(false);
+            }}
+            className="w-full flex items-center justify-between py-2 px-3 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-800 hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-colors shadow-sm group"
+          >
+            <span className="flex items-center space-x-2">
+              <Cpu size={16} className="text-slate-600 group-hover:text-white transition-colors" />
+              <span>MCP for AI Agent</span>
+            </span>
+            <span className="flex items-center gap-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 group-hover:bg-emerald-500/20 group-hover:text-emerald-300">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              MCP
+            </span>
+          </button>
+          {!user && (
             <div className="flex space-x-2">
               <button 
                 onClick={handleExport}
@@ -1950,8 +2168,8 @@ export default function App() {
                 onChange={handleImport}
               />
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </aside>
 
       {/* Main Content */}
@@ -2082,6 +2300,16 @@ export default function App() {
                           </div>
                           <button 
                             className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 flex items-center transition-colors mt-1"
+                            onClick={() => {
+                              setIsProfileMenuOpen(false);
+                              setIsMcpModalOpen(true);
+                            }}
+                          >
+                            <Cpu size={16} className="mr-2 text-slate-400" />
+                            MCP for AI Agent
+                          </button>
+                          <button 
+                            className="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 flex items-center transition-colors"
                             onClick={() => {
                               setIsProfileMenuOpen(false);
                               setIsSettingsModalOpen(true);
@@ -3181,6 +3409,23 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* MCP for AI Agents Modal */}
+      <McpModal
+        isOpen={isMcpModalOpen}
+        onClose={() => setIsMcpModalOpen(false)}
+        isSignedIn={Boolean(user)}
+        vaultVersion={mcpVaultVersion}
+        lastSyncedAt={mcpLastSyncedAt}
+        isSyncingMcp={isSyncingMcp}
+        tokens={mcpTokens}
+        activity={mcpActivity}
+        onRefresh={refreshMcpStatus}
+        onForceSync={() => syncVaultToMcp(rootFolder, true)}
+        onCreateToken={handleCreateMcpToken}
+        onRevokeToken={handleRevokeMcpToken}
+        onRunPlayground={handleRunMcpPlayground}
+      />
 
     </div>
   );
