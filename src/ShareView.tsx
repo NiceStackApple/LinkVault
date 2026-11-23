@@ -9,6 +9,30 @@ import { motion, AnimatePresence } from 'motion/react';
 const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> = ({ link, onOpenNote }) => {
   const [copied, setCopied] = useState(false);
 
+  const getDomain = (url: string) => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return url;
+    }
+  };
+
+  const getFavicon = (url: string) => {
+    try {
+      const domain = new URL(url).hostname;
+      return `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+    } catch {
+      return null;
+    }
+  };
+
+  const getYoutubeThumbnail = (url: string) => {
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    const match = (url || '').match(regExp);
+    const id = (match && match[2].length === 11) ? match[2] : null;
+    return id ? `https://img.youtube.com/vi/${id}/mqdefault.jpg` : null;
+  };
+
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
     navigator.clipboard.writeText(link.type === 'note' ? (link.content || '') : (link.url || ''));
@@ -16,24 +40,65 @@ const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> =
     setTimeout(() => setCopied(false), 1500);
   };
 
+  const handleCardClick = () => {
+    if (link.type === 'note') {
+      onOpenNote(link);
+    } else if (link.url) {
+      window.open(link.url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const ytThumb = link.type === 'youtube' ? getYoutubeThumbnail(link.url) : null;
+
   return (
-    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow flex flex-col">
-      {link.previewImage && (
-        <div className="h-32 w-full bg-slate-100 border-b border-slate-100 overflow-hidden">
-          <img src={link.previewImage} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+    <div
+      onClick={handleCardClick}
+      className="h-full bg-white border border-slate-200 rounded-xl overflow-visible shadow-sm hover:shadow-md transition-all flex flex-col cursor-pointer"
+    >
+      {link.type === 'note' ? (
+        <div className="h-24 w-full bg-emerald-50 relative overflow-hidden rounded-t-xl px-3.5 py-2.5 border-b border-emerald-100/60">
+          <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed whitespace-pre-wrap font-mono">
+            {link.content || 'Empty note...'}
+          </p>
+        </div>
+      ) : ytThumb ? (
+        <div className="h-24 w-full bg-slate-100 border-b border-slate-100 overflow-hidden rounded-t-xl">
+          <img src={ytThumb} alt={link.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+        </div>
+      ) : link.previewImage ? (
+        <div className="h-24 w-full bg-slate-100 border-b border-slate-100 overflow-hidden rounded-t-xl">
+          <img src={link.previewImage} alt={link.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+        </div>
+      ) : (
+        <div className="h-24 w-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center rounded-t-xl border-b border-slate-100">
+          {getFavicon(link.url) ? (
+            <img src={getFavicon(link.url)!} alt="favicon" className="w-10 h-10 rounded-lg shadow-sm bg-white p-1" referrerPolicy="no-referrer" />
+          ) : (
+            <Globe size={28} className="text-slate-300" />
+          )}
         </div>
       )}
-      <div className="p-4 flex flex-col flex-1">
-        <div className="flex items-start justify-between mb-2">
-          <h3 className="font-medium text-slate-800 line-clamp-2" title={link.title}>{link.title}</h3>
+      <div className="p-3.5 flex flex-col flex-1">
+        <div className="relative group/title mb-1.5">
+          <h3
+            className="font-semibold text-slate-800 text-sm leading-5 line-clamp-3 min-h-[3.75rem] break-words"
+            title={link.title}
+          >
+            {link.title}
+          </h3>
+          {typeof link.title === 'string' && link.title.length > 52 && (
+            <div className="pointer-events-none opacity-0 group-hover/title:opacity-100 transition-opacity duration-150 delay-150 absolute left-0 bottom-full mb-1.5 z-40 w-64 max-w-[80vw] rounded-lg bg-slate-900 text-white text-xs leading-relaxed px-2.5 py-2 shadow-lg break-words">
+              {link.title}
+            </div>
+          )}
         </div>
         {link.type === 'note' ? (
-          <p className="text-sm text-slate-500 line-clamp-2 mb-3">{link.content}</p>
+          <p className="text-xs text-emerald-600/80 truncate mb-3">Text Note</p>
         ) : (
-          <p className="text-sm text-slate-500 truncate mb-3" title={link.url}>{link.url}</p>
+          <p className="text-xs text-slate-500 truncate mb-3" title={link.url}>{getDomain(link.url || '')}</p>
         )}
-        <div className="flex items-center justify-between mt-auto pt-2">
-          <span className="text-xs font-medium px-2 py-1 bg-slate-100 text-slate-600 rounded-md capitalize">
+        <div className="flex items-center justify-between mt-auto pt-1">
+          <span className="text-[11px] font-medium text-slate-500 capitalize">
             {link.type}
           </span>
           <div className="flex space-x-2">
@@ -46,7 +111,7 @@ const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> =
             </button>
             {link.type === 'note' ? (
               <button 
-                onClick={() => onOpenNote(link)}
+                onClick={(e) => { e.stopPropagation(); onOpenNote(link); }}
                 className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-emerald-600 bg-emerald-50 hover:bg-emerald-100"
               >
                 <FileText size={12} />
@@ -57,6 +122,7 @@ const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> =
                 href={link.url}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
                 className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-slate-800 bg-slate-100 hover:bg-slate-200"
               >
                 <ExternalLink size={12} />
@@ -73,8 +139,7 @@ const SharedLinkCard: React.FC<{ link: any, onOpenNote: (link: any) => void }> =
 const SharedFolderCard: React.FC<{ folder: Folder, onDoubleClick: () => void }> = ({ folder, onDoubleClick }) => {
   return (
     <div 
-      className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow flex items-center cursor-pointer"
-      onDoubleClick={onDoubleClick}
+      className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow flex items-center cursor-pointer select-none"
       onClick={onDoubleClick}
     >
       <div 
@@ -592,7 +657,7 @@ export default function ShareView({
               <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Items</h2>
               {currentFolder.folders.length === 0 && currentFolderId === rootFolder.id && !isShortcutView && sortDropdown}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-stretch">
               {sortItems(currentFolder.links).map(link => (
                 <SharedLinkCard 
                   key={link.id} 

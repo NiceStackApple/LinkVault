@@ -292,16 +292,21 @@ export function saveWorkspaceVault(
   options?: { expectedVersion?: number; force?: boolean }
 ): { version: number; updatedAt: number; conflict: boolean } {
   const now = Date.now();
+  const nextJson = JSON.stringify(vault);
   if (sqliteDb) {
     const existing = sqliteDb
-      .prepare('SELECT version, updated_at FROM mcp_workspaces WHERE workspace_id = ?')
-      .get(workspaceId) as { version: number; updated_at: number } | undefined;
+      .prepare('SELECT vault_json, version, updated_at FROM mcp_workspaces WHERE workspace_id = ?')
+      .get(workspaceId) as { vault_json: string; version: number; updated_at: number } | undefined;
 
     if (!existing) {
       sqliteDb
         .prepare('INSERT INTO mcp_workspaces (workspace_id, vault_json, version, updated_at) VALUES (?, ?, ?, ?)')
-        .run(workspaceId, JSON.stringify(vault), 1, now);
+        .run(workspaceId, nextJson, 1, now);
       return { version: 1, updatedAt: now, conflict: false };
+    }
+
+    if (existing.vault_json === nextJson) {
+      return { version: existing.version, updatedAt: existing.updated_at, conflict: false };
     }
 
     if (
@@ -315,7 +320,7 @@ export function saveWorkspaceVault(
     const nextVersion = existing.version + 1;
     sqliteDb
       .prepare('UPDATE mcp_workspaces SET vault_json = ?, version = ?, updated_at = ? WHERE workspace_id = ?')
-      .run(JSON.stringify(vault), nextVersion, now, workspaceId);
+      .run(nextJson, nextVersion, now, workspaceId);
 
     return { version: nextVersion, updatedAt: now, conflict: false };
   }
@@ -323,9 +328,12 @@ export function saveWorkspaceVault(
   const store = readJsonStore();
   const existing = store.workspaces[workspaceId];
   if (!existing) {
-    store.workspaces[workspaceId] = { vault_json: JSON.stringify(vault), version: 1, updated_at: now };
+    store.workspaces[workspaceId] = { vault_json: nextJson, version: 1, updated_at: now };
     writeJsonStore(store);
     return { version: 1, updatedAt: now, conflict: false };
+  }
+  if (existing.vault_json === nextJson) {
+    return { version: existing.version, updatedAt: existing.updated_at, conflict: false };
   }
   if (
     !options?.force &&
@@ -335,7 +343,7 @@ export function saveWorkspaceVault(
     return { version: existing.version, updatedAt: existing.updated_at, conflict: true };
   }
   const nextVersion = existing.version + 1;
-  store.workspaces[workspaceId] = { vault_json: JSON.stringify(vault), version: nextVersion, updated_at: now };
+  store.workspaces[workspaceId] = { vault_json: nextJson, version: nextVersion, updated_at: now };
   writeJsonStore(store);
   return { version: nextVersion, updatedAt: now, conflict: false };
 }

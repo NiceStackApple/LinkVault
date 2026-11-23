@@ -42,7 +42,7 @@ import {
 import { auth, googleProvider, db } from './firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User, updateProfile, deleteUser } from 'firebase/auth';
 import { doc, setDoc, deleteDoc, collection, getDocs, query, where, writeBatch } from 'firebase/firestore';
-import { syncToFirestore, fetchFromFirestore } from './sync';
+import { syncToFirestore, fetchFromFirestore, clearSyncSnapshot, serializeVaultForDiff } from './sync';
 import ShareView from './ShareView';
 import { motion, AnimatePresence } from 'motion/react';
 import { BrandLogo } from './components/BrandLogo';
@@ -354,29 +354,160 @@ const EditableLinkTitle = ({ title, onSave, isEditing, setIsEditing }: { title: 
   }
 
   return (
-    <h3 
-      className="font-semibold text-slate-800 truncate transition-colors text-sm"
-    >
-      {title}
-    </h3>
+    <div className="relative group/title">
+      <h3
+        className="font-semibold text-slate-800 text-sm leading-5 line-clamp-3 min-h-[3.75rem] break-words transition-colors"
+        title={title}
+      >
+        {title}
+      </h3>
+      {title.length > 52 && (
+        <div className="pointer-events-none opacity-0 group-hover/title:opacity-100 transition-opacity duration-150 delay-150 absolute left-0 bottom-full mb-1.5 z-40 w-64 max-w-[80vw] rounded-lg bg-slate-900 text-white text-xs leading-relaxed px-2.5 py-2 shadow-lg break-words">
+          {title}
+        </div>
+      )}
+    </div>
   );
 };
+
+const LONG_PRESS_MS = 420;
+const LONG_PRESS_MOVE_THRESHOLD = 10;
+
+function useLongPress({
+  onLongPress,
+  disabled = false,
+}: {
+  onLongPress?: () => void;
+  disabled?: boolean;
+}) {
+  const timerRef = useRef<number | null>(null);
+  const resetFlagTimerRef = useRef<number | null>(null);
+  const startPosRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressFiredRef = useRef(false);
+
+  const clearTimer = () => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    startPosRef.current = null;
+  };
+
+  useEffect(() => {
+    return () => {
+      clearTimer();
+      if (resetFlagTimerRef.current !== null) {
+        window.clearTimeout(resetFlagTimerRef.current);
+      }
+    };
+  }, []);
+
+  const isInteractiveTarget = (target: EventTarget | null): boolean => {
+    if (!(target instanceof Element)) return false;
+    return Boolean(target.closest('button, a, input, textarea, [data-no-longpress="true"]'));
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (disabled || !onLongPress) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (isInteractiveTarget(e.target)) return;
+
+    if (resetFlagTimerRef.current !== null) {
+      window.clearTimeout(resetFlagTimerRef.current);
+      resetFlagTimerRef.current = null;
+    }
+    longPressFiredRef.current = false;
+    clearTimer();
+    startPosRef.current = { x: e.clientX, y: e.clientY };
+
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      longPressFiredRef.current = true;
+      try {
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          navigator.vibrate(15);
+        }
+      } catch {
+        // ignore vibration errors
+      }
+      onLongPress();
+    }, LONG_PRESS_MS);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!startPosRef.current || timerRef.current === null) return;
+    const dx = Math.abs(e.clientX - startPosRef.current.x);
+    const dy = Math.abs(e.clientY - startPosRef.current.y);
+    if (dx > LONG_PRESS_MOVE_THRESHOLD || dy > LONG_PRESS_MOVE_THRESHOLD) {
+      clearTimer();
+    }
+  };
+
+  const handleRelease = () => {
+    clearTimer();
+    if (longPressFiredRef.current) {
+      if (resetFlagTimerRef.current !== null) {
+        window.clearTimeout(resetFlagTimerRef.current);
+      }
+      resetFlagTimerRef.current = window.setTimeout(() => {
+        longPressFiredRef.current = false;
+        resetFlagTimerRef.current = null;
+      }, 350);
+    }
+  };
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    if (longPressFiredRef.current || timerRef.current !== null) {
+      e.preventDefault();
+    }
+  };
+
+  const consumeLongPress = () => {
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      if (resetFlagTimerRef.current !== null) {
+        window.clearTimeout(resetFlagTimerRef.current);
+        resetFlagTimerRef.current = null;
+      }
+      return true;
+    }
+    return false;
+  };
+
+  return {
+    bind: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: handleRelease,
+      onPointerCancel: handleRelease,
+      onPointerLeave: clearTimer,
+      onContextMenu,
+    },
+    consumeLongPress,
+  };
+}
 
 const LinkCard: React.FC<{ 
   link: LinkItem, 
   onUpdate: (l: LinkItem) => void, 
   onDelete: (id: string) => void,
   isSelected?: boolean,
-  onClick?: (e: React.MouseEvent) => void,
-  onDoubleClick?: (e: React.MouseEvent) => void,
+  isSelectionMode?: boolean,
+  onToggleSelect?: () => void,
+  onLongPressSelect?: () => void,
   onOpenNote?: (l: LinkItem) => void,
   onOpen?: (l: LinkItem) => void
-}> = ({ link, onUpdate, onDelete, isSelected, onClick, onDoubleClick, onOpenNote, onOpen }) => {
+}> = ({ link, onUpdate, onDelete, isSelected, isSelectionMode = false, onToggleSelect, onLongPressSelect, onOpenNote, onOpen }) => {
   const [copied, setCopied] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const { bind: longPressBind, consumeLongPress } = useLongPress({
+    onLongPress: onLongPressSelect,
+    disabled: isEditing || showMenu,
+  });
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -429,28 +560,39 @@ const LinkCard: React.FC<{
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDoubleClick = (e: React.MouseEvent) => {
-    if (onDoubleClick) {
-      onDoubleClick(e);
-    } else {
-      if (onOpen) onOpen(link);
-      if (link.type === 'note' && onOpenNote) {
-        onOpenNote(link);
-      } else if (link.url) {
-        window.open(link.url, '_blank');
-      }
+  const openLinkItem = () => {
+    if (onOpen) onOpen(link);
+    if (link.type === 'note' && onOpenNote) {
+      onOpenNote(link);
+    } else if (link.url) {
+      window.open(link.url, '_blank', 'noopener,noreferrer');
     }
+  };
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isEditing) return;
+    if (consumeLongPress()) return;
+    if (e.metaKey || e.ctrlKey) {
+      onToggleSelect?.();
+      return;
+    }
+    if (isSelectionMode) {
+      onToggleSelect?.();
+      return;
+    }
+    openLinkItem();
   };
 
   return (
     <div 
-      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl overflow-visible flex flex-col transition-all relative cursor-pointer ${isSelected ? 'border-slate-800 ring-1 ring-slate-800 bg-slate-100/50' : 'border-white/40'} ${showMenu ? 'z-50' : 'z-10'}`}
-      onClick={onClick}
-      onDoubleClick={handleDoubleClick}
+      {...longPressBind}
+      className={`group h-full bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl overflow-visible flex flex-col transition-all relative cursor-pointer select-none ${isSelected ? 'border-slate-800 ring-2 ring-slate-800 bg-slate-100/70' : 'border-white/40 hover:border-slate-300/80'} ${showMenu ? 'z-50' : 'z-10'}`}
+      onClick={handleCardClick}
     >
       {link.type === 'note' ? (
-        <div className="h-32 w-full bg-emerald-50 relative overflow-hidden rounded-t-xl p-4 border-b border-emerald-100/50">
-          <p className="text-xs text-slate-600 line-clamp-4 whitespace-pre-wrap font-mono">
+        <div className="h-24 w-full bg-emerald-50 relative overflow-hidden rounded-t-xl px-3.5 py-2.5 border-b border-emerald-100/50">
+          <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed whitespace-pre-wrap font-mono">
             {link.content || 'Empty note...'}
           </p>
           <div className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full shadow-sm">
@@ -458,41 +600,51 @@ const LinkCard: React.FC<{
           </div>
         </div>
       ) : link.type === 'youtube' && getYoutubeThumbnail(link.url) ? (
-        <div className="h-32 w-full bg-slate-100 relative overflow-hidden rounded-t-xl">
+        <div className="h-24 w-full bg-slate-100 relative overflow-hidden rounded-t-xl">
           <img src={getYoutubeThumbnail(link.url)!} alt={link.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
           <div className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full shadow-sm">
             <Icon />
           </div>
         </div>
       ) : link.previewImage ? (
-        <div className="h-[140px] w-full bg-slate-100 relative overflow-hidden rounded-t-xl">
+        <div className="h-24 w-full bg-slate-100 relative overflow-hidden rounded-t-xl">
           <img src={link.previewImage} alt={link.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
           <div className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full shadow-sm">
             <Icon />
           </div>
         </div>
       ) : (
-        <div className="h-32 w-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center relative rounded-t-xl">
+        <div className="h-24 w-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center relative rounded-t-xl">
           {getFavicon(link.url) ? (
-            <img src={getFavicon(link.url)!} alt="favicon" className="w-12 h-12 rounded-lg shadow-sm bg-white p-1" referrerPolicy="no-referrer" />
+            <img src={getFavicon(link.url)!} alt="favicon" className="w-10 h-10 rounded-lg shadow-sm bg-white p-1" referrerPolicy="no-referrer" />
           ) : (
-            <Globe size={32} className="text-slate-300" />
+            <Globe size={28} className="text-slate-300" />
           )}
           <div className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full shadow-sm">
             <Icon />
           </div>
         </div>
       )}
+
+      {isSelectionMode && (
+        <div
+          className={`absolute top-2 left-2 w-6 h-6 rounded-full border-2 flex items-center justify-center shadow-sm transition-colors z-20 ${
+            isSelected ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white/90 border-slate-300 text-transparent'
+          }`}
+        >
+          <Check size={13} strokeWidth={3} />
+        </div>
+      )}
       
       {link.starred && (
-        <div className="absolute top-2 left-2 bg-yellow-400/90 p-1.5 rounded-full shadow-sm text-white z-10">
+        <div className={`absolute top-2 ${isSelectionMode ? 'left-10' : 'left-2'} bg-yellow-400/90 p-1.5 rounded-full shadow-sm text-white z-10 transition-all`}>
           <Star size={14} className="fill-current" />
         </div>
       )}
       
-      <div className="p-4 flex-1 flex flex-col relative">
-        <div className="flex justify-between items-start mb-1">
-          <div className="flex-1 min-w-0 mr-2">
+      <div className="p-3.5 flex-1 flex flex-col relative">
+        <div className="flex justify-between items-start gap-1.5 mb-1.5">
+          <div className="flex-1 min-w-0">
             <EditableLinkTitle 
               title={link.title} 
               onSave={(newTitle) => onUpdate({ ...link, title: newTitle })} 
@@ -501,10 +653,11 @@ const LinkCard: React.FC<{
             />
           </div>
           
-          <div className="relative" ref={menuRef}>
+          <div className="relative flex-shrink-0" ref={menuRef} data-no-longpress="true">
             <button 
               className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors flex-shrink-0"
               onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); setShowDeleteConfirm(false); }}
+              title="Item options"
             >
               <MoreVertical size={16} />
             </button>
@@ -577,23 +730,31 @@ const LinkCard: React.FC<{
         </div>
         
         {link.type === 'note' ? (
-          <div className="text-xs text-emerald-600/80 truncate mb-4 block flex items-center">
-            <AlignLeft size={12} className="mr-1" /> Text Note
+          <div className="text-xs text-emerald-600/80 truncate mb-3 block flex items-center">
+            <AlignLeft size={12} className="mr-1 flex-shrink-0" /> Text Note
           </div>
         ) : (
           <a 
             href={link.url} 
             target="_blank" 
             rel="noopener noreferrer"
-            className="text-xs text-slate-500 truncate hover:text-slate-800 transition-colors mb-4 block"
-            onClick={e => { if (onDoubleClick) e.preventDefault(); }}
+            className="text-xs text-slate-500 truncate hover:text-slate-800 transition-colors mb-3 block"
+            onClick={e => {
+              e.stopPropagation();
+              if (isSelectionMode) {
+                e.preventDefault();
+                onToggleSelect?.();
+              } else if (onOpen) {
+                onOpen(link);
+              }
+            }}
           >
             {getDomain(link.url)}
           </a>
         )}
         
-        <div className="mt-auto flex items-center justify-between">
-          <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">
+        <div className="mt-auto flex items-center justify-between pt-1">
+          <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider tabular-nums">
             {new Date(link.dateAdded).toLocaleDateString()}
           </span>
           <div className="flex space-x-2">
@@ -610,7 +771,7 @@ const LinkCard: React.FC<{
             )}
             {link.type === 'note' ? (
               <button 
-                onClick={(e) => { e.stopPropagation(); if (onOpenNote) onOpenNote(link); }}
+                onClick={(e) => { e.stopPropagation(); if (onOpen) onOpen(link); if (onOpenNote) onOpenNote(link); }}
                 className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-emerald-600 bg-emerald-50 hover:bg-emerald-100"
               >
                 <FileText size={12} />
@@ -622,7 +783,7 @@ const LinkCard: React.FC<{
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center space-x-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors text-slate-800 bg-slate-100 hover:bg-slate-200"
-                onClick={e => e.stopPropagation()}
+                onClick={e => { e.stopPropagation(); if (onOpen) onOpen(link); }}
               >
                 <ExternalLink size={12} />
                 <span>Open</span>
@@ -638,8 +799,8 @@ const LinkCard: React.FC<{
 const UpFolderCard: React.FC<{ onClick: () => void, parentName: string }> = ({ onClick, parentName }) => {
   return (
     <div 
-      className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow flex items-center cursor-pointer"
-      onClick={onClick}
+      className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow flex items-center cursor-pointer select-none"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
     >
       <div className="w-10 h-10 rounded-lg flex items-center justify-center mr-3 flex-shrink-0 bg-slate-100 text-slate-500">
         <ArrowUp size={20} />
@@ -654,17 +815,24 @@ const UpFolderCard: React.FC<{ onClick: () => void, parentName: string }> = ({ o
 
 const FolderCard: React.FC<{ 
   folder: Folder, 
-  onDoubleClick: () => void, 
-  onClick?: (e: React.MouseEvent) => void,
+  onOpen: () => void, 
+  onToggleSelect?: () => void,
+  onLongPressSelect?: () => void,
   onUpdate: (f: Folder) => void, 
   onDeleteRequest: (f: Folder) => void,
   onShareRequest?: (f: Folder) => void,
   isSelected?: boolean,
+  isSelectionMode?: boolean,
   user?: any
-}> = ({ folder, onDoubleClick, onClick, onUpdate, onDeleteRequest, onShareRequest, isSelected, user }) => {
+}> = ({ folder, onOpen, onToggleSelect, onLongPressSelect, onUpdate, onDeleteRequest, onShareRequest, isSelected, isSelectionMode = false, user }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const { bind: longPressBind, consumeLongPress } = useLongPress({
+    onLongPress: onLongPressSelect,
+    disabled: isEditing || showMenu,
+  });
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -676,13 +844,36 @@ const FolderCard: React.FC<{
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isEditing) return;
+    if (consumeLongPress()) return;
+    if (e.metaKey || e.ctrlKey) {
+      onToggleSelect?.();
+      return;
+    }
+    if (isSelectionMode) {
+      onToggleSelect?.();
+      return;
+    }
+    onOpen();
+  };
+
   return (
     <div 
-      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl p-4 flex items-center cursor-pointer transition-all hover:border-slate-300 relative overflow-visible ${isSelected ? 'border-slate-800 ring-1 ring-slate-800 bg-slate-100/50' : 'border-white/40'} ${showMenu ? 'z-50' : 'z-10'}`}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      title="Double-click to open"
+      {...longPressBind}
+      className={`group bg-white/60 backdrop-blur-md border shadow-sm hover:shadow-md rounded-xl p-4 flex items-center cursor-pointer select-none transition-all hover:border-slate-300 relative overflow-visible ${isSelected ? 'border-slate-800 ring-2 ring-slate-800 bg-slate-100/70' : 'border-white/40'} ${showMenu ? 'z-50' : 'z-10'}`}
+      onClick={handleCardClick}
     >
+      {isSelectionMode && (
+        <div
+          className={`w-5 h-5 rounded-full border-2 flex items-center justify-center mr-2.5 flex-shrink-0 transition-colors ${
+            isSelected ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-slate-300 text-transparent'
+          }`}
+        >
+          <Check size={12} strokeWidth={3} />
+        </div>
+      )}
       <div 
         className="w-10 h-10 rounded-lg flex items-center justify-center mr-3 flex-shrink-0 relative"
         style={{ backgroundColor: folder.color ? `${folder.color}20` : '#eef2ff' }}
@@ -721,10 +912,11 @@ const FolderCard: React.FC<{
         )}
       </div>
       
-      <div className="relative" ref={menuRef}>
+      <div className="relative" ref={menuRef} data-no-longpress="true">
         <button 
           className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
           onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
+          title="Folder options"
         >
           <MoreVertical size={16} />
         </button>
@@ -1001,9 +1193,6 @@ export default function App() {
             }
             // Clear local storage after successful merge
             localStorage.removeItem('linkvault_backup');
-          } else if (remoteData.folders.length === 0 && remoteData.links.length === 0) {
-            // First time login with no local data, just sync empty state
-            await syncToFirestore(currentUser.uid, localData);
           }
           
           setRootFolder(mergedData);
@@ -1014,6 +1203,7 @@ export default function App() {
           setLoadingState('READY');
         }
       } else {
+        clearSyncSnapshot();
         // Revert to local storage
         const saved = localStorage.getItem('linkvault_backup');
         if (saved) {
@@ -1246,14 +1436,24 @@ export default function App() {
   };
 
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
-  const [explicitBulkMode, setExplicitBulkMode] = useState(false);
-  const isBulkMode = selectedItemIds.length >= 2 || explicitBulkMode;
+  const isSelectionMode = selectedItemIds.length > 0;
   
   // Clear selection when changing folders or searching
   useEffect(() => {
     setSelectedItemIds([]);
-    setExplicitBulkMode(false);
   }, [currentFolderId, searchQuery]);
+
+  // Press Escape to exit selection mode cleanly
+  useEffect(() => {
+    if (selectedItemIds.length === 0) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedItemIds([]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedItemIds.length]);
   
   const [clipboard, setClipboard] = useState<{ ids: string[], action: 'copy' | 'cut' } | null>(null);
   
@@ -1299,12 +1499,18 @@ export default function App() {
   }, [folderToDelete]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastMcpVaultSigRef = useRef<string | null>(null);
+  const mcpBackoffUntilRef = useRef<number>(0);
+  const lastMcpPollAtRef = useRef<number>(0);
 
-  // Auto-save
+  // Auto-save (debounced + diff-based in syncToFirestore so unchanged state writes 0 docs)
   useEffect(() => {
     if (user) {
       if (!isSyncing) {
-        syncToFirestore(user.uid, rootFolder).catch(console.error);
+        const timer = setTimeout(() => {
+          syncToFirestore(user.uid, rootFolder).catch(console.error);
+        }, 500);
+        return () => clearTimeout(timer);
       }
     } else {
       localStorage.setItem('linkvault_backup', JSON.stringify(rootFolder));
@@ -1316,6 +1522,8 @@ export default function App() {
     mcpSessionTokenRef.current = null;
     mcpVaultVersionRef.current = 1;
     mcpActiveRef.current = false;
+    lastMcpVaultSigRef.current = null;
+    mcpBackoffUntilRef.current = 0;
     setMcpTokens([]);
     setMcpActivity([]);
     setMcpVaultVersion(1);
@@ -1379,7 +1587,21 @@ export default function App() {
     return `${fallback} (HTTP ${res.status})`;
   };
 
+  const applyRemoteMcpVault = (remoteVault: Folder, version: number, updatedAt: number | null) => {
+    lastMcpVaultSigRef.current = serializeVaultForDiff(remoteVault);
+    isApplyingRemoteMcpRef.current = true;
+    mcpVaultVersionRef.current = version;
+    setMcpVaultVersion(version);
+    setMcpLastSyncedAt(updatedAt);
+    setRootFolder(remoteVault);
+    setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 1500);
+  };
+
   const syncVaultToMcp = async (vaultToSync: Folder, force = false) => {
+    const incomingSig = serializeVaultForDiff(vaultToSync);
+    if (!force && lastMcpVaultSigRef.current === incomingSig) {
+      return;
+    }
     setIsSyncingMcp(true);
     try {
       const res = await fetchWithMcpAuth('/api/mcp/sync', {
@@ -1391,20 +1613,20 @@ export default function App() {
           force,
         }),
       });
+      if (res.status === 429) {
+        mcpBackoffUntilRef.current = Date.now() + 120_000;
+        return;
+      }
       if (res.status === 409) {
         const conflictData = await res.json();
         if (conflictData.vault) {
-          isApplyingRemoteMcpRef.current = true;
-          mcpVaultVersionRef.current = conflictData.version;
-          setMcpVaultVersion(conflictData.version);
-          setMcpLastSyncedAt(conflictData.updatedAt);
-          setRootFolder(conflictData.vault);
-          setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 100);
+          applyRemoteMcpVault(conflictData.vault, conflictData.version, conflictData.updatedAt);
         }
         return;
       }
       if (res.ok) {
         const data = await res.json();
+        lastMcpVaultSigRef.current = incomingSig;
         mcpVaultVersionRef.current = data.version;
         setMcpVaultVersion(data.version);
         setMcpLastSyncedAt(data.updatedAt);
@@ -1420,6 +1642,10 @@ export default function App() {
   const refreshMcpStatus = async () => {
     try {
       const res = await fetchWithMcpAuth('/api/mcp/tokens');
+      if (res.status === 429) {
+        mcpBackoffUntilRef.current = Date.now() + 120_000;
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
         setMcpTokens(data.tokens || []);
@@ -1430,16 +1656,11 @@ export default function App() {
           if (vaultRes.ok) {
             const vData = await vaultRes.json();
             if (vData.vault) {
-              isApplyingRemoteMcpRef.current = true;
-              mcpVaultVersionRef.current = vData.version;
-              setMcpVaultVersion(vData.version);
-              setMcpLastSyncedAt(vData.updatedAt);
-              setRootFolder(vData.vault);
-              setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 100);
+              applyRemoteMcpVault(vData.vault, vData.version, vData.updatedAt);
             }
           }
-        } else {
-          await syncVaultToMcp(rootFolder, true);
+        } else if (lastMcpVaultSigRef.current !== serializeVaultForDiff(rootFolder)) {
+          await syncVaultToMcp(rootFolder, false);
         }
       }
     } catch (err) {
@@ -1448,7 +1669,9 @@ export default function App() {
   };
 
   const handleCreateMcpToken = async (label: string): Promise<string | null> => {
-    await syncVaultToMcp(rootFolder, true);
+    if (lastMcpVaultSigRef.current !== serializeVaultForDiff(rootFolder)) {
+      await syncVaultToMcp(rootFolder, false);
+    }
     const res = await fetchWithMcpAuth('/api/mcp/tokens', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1499,58 +1722,69 @@ export default function App() {
       if (vaultRes.ok) {
         const vData = await vaultRes.json();
         if (vData.vault) {
-          isApplyingRemoteMcpRef.current = true;
-          mcpVaultVersionRef.current = vData.version;
-          setMcpVaultVersion(vData.version);
-          setMcpLastSyncedAt(vData.updatedAt);
-          setRootFolder(vData.vault);
-          setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 100);
+          applyRemoteMcpVault(vData.vault, vData.version, vData.updatedAt);
         }
       }
     }
     return data.response;
   };
 
-  // Push local vault changes to MCP server whenever active
+  // Push local vault changes to MCP server ONLY when content actually differs from last synced signature
   useEffect(() => {
     if (!mcpActiveRef.current || isApplyingRemoteMcpRef.current || isSyncing) return;
+    if (Date.now() < mcpBackoffUntilRef.current) return;
+    const currentSig = serializeVaultForDiff(rootFolder);
+    if (lastMcpVaultSigRef.current === currentSig) return;
+
     const timer = setTimeout(() => {
-      syncVaultToMcp(rootFolder, true);
-    }, 500);
+      if (isApplyingRemoteMcpRef.current) return;
+      if (lastMcpVaultSigRef.current === serializeVaultForDiff(rootFolder)) return;
+      syncVaultToMcp(rootFolder, false);
+    }, 1200);
     return () => clearTimeout(timer);
   }, [rootFolder, user, isSyncing]);
 
-  // Poll MCP server for external AI agent updates
+  // Poll MCP server for external AI agent updates (30s idle / 15s modal open, paused when tab hidden, backs off on 429)
   useEffect(() => {
     if (!isMcpModalOpen && mcpTokens.length === 0) return;
-    const interval = setInterval(async () => {
+
+    const pollOnce = async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      if (Date.now() < mcpBackoffUntilRef.current) return;
+      lastMcpPollAtRef.current = Date.now();
       try {
         const res = await fetchWithMcpAuth('/api/mcp/vault');
+        if (res.status === 429) {
+          mcpBackoffUntilRef.current = Date.now() + 120_000;
+          return;
+        }
         if (!res.ok) return;
         const data = await res.json();
         if (data.activity) setMcpActivity(data.activity);
         if (typeof data.version === 'number' && data.version > mcpVaultVersionRef.current && data.vault) {
-          isApplyingRemoteMcpRef.current = true;
-          mcpVaultVersionRef.current = data.version;
-          setMcpVaultVersion(data.version);
-          setMcpLastSyncedAt(data.updatedAt);
-          setRootFolder(data.vault);
+          applyRemoteMcpVault(data.vault, data.version, data.updatedAt);
           showToast('Vault updated by AI Agent via MCP');
-          setTimeout(() => { isApplyingRemoteMcpRef.current = false; }, 100);
         }
       } catch {
         // Ignore transient polling failures
       }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [isMcpModalOpen, mcpTokens.length, user]);
+    };
 
-  // Disable bulk mode when no items are selected
-  useEffect(() => {
-    if (selectedItemIds.length === 0 && explicitBulkMode) {
-      setExplicitBulkMode(false);
-    }
-  }, [selectedItemIds.length, explicitBulkMode]);
+    const pollIntervalMs = isMcpModalOpen ? 15000 : 30000;
+    const interval = setInterval(pollOnce, pollIntervalMs);
+
+    const onVisibilityChange = () => {
+      if (!document.hidden && Date.now() - lastMcpPollAtRef.current > 15000) {
+        pollOnce();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [isMcpModalOpen, mcpTokens.length, user]);
 
   const currentFolder = findFolder(rootFolder, currentFolderId) || rootFolder;
   const breadcrumbs = getBreadcrumbs(rootFolder, currentFolderId) || [rootFolder];
@@ -1711,43 +1945,36 @@ export default function App() {
     setRootFolder(prev => updateFolder(prev, updatedFolder.id, () => updatedFolder));
   };
 
-  const toggleItemSelection = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (explicitBulkMode) {
-      setSelectedItemIds(prev => 
-        prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
-      );
-    } else {
-      setSelectedItemIds(prev => 
-        prev.includes(id) && prev.length === 1 ? [] : [id]
-      );
-    }
+  const toggleItemSelection = (id: string) => {
+    setSelectedItemIds(prev =>
+      prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
+    );
+  };
+
+  const selectItemOnHold = (id: string) => {
+    setSelectedItemIds(prev => (prev.includes(id) ? prev : [...prev, id]));
   };
 
   const handleBulkDelete = () => {
     if (confirm(`Are you sure you want to delete ${selectedItemIds.length} items?`)) {
       setRootFolder(prev => removeItemsByIds(prev, selectedItemIds));
       setSelectedItemIds([]);
-      setExplicitBulkMode(false);
     }
   };
 
   const handleBulkStar = () => {
     setRootFolder(prev => updateItemsInTreeBulk(prev, selectedItemIds, f => ({ ...f, starred: true }), l => ({ ...l, starred: true })));
     setSelectedItemIds([]);
-    setExplicitBulkMode(false);
   };
 
   const handleCut = () => {
     setClipboard({ ids: selectedItemIds, action: 'cut' });
     setSelectedItemIds([]);
-    setExplicitBulkMode(false);
   };
 
   const handleCopyItems = () => {
     setClipboard({ ids: selectedItemIds, action: 'copy' });
     setSelectedItemIds([]);
-    setExplicitBulkMode(false);
   };
 
   const handlePaste = () => {
@@ -1808,7 +2035,6 @@ export default function App() {
     });
 
     setSelectedItemIds([]);
-    setExplicitBulkMode(false);
     setIsUnityModalOpen(false);
     setUnityFolderName('');
   };
@@ -2223,39 +2449,32 @@ export default function App() {
           {selectedItemIds.length > 0 ? (
             <header className="h-16 bg-slate-100/90 backdrop-blur-md border-b border-slate-200 flex items-center px-4 sm:px-8 justify-between gap-4">
               <div className="flex items-center">
-                <button onClick={() => { setSelectedItemIds([]); setExplicitBulkMode(false); }} className="p-2 text-slate-500 hover:bg-slate-200 rounded-full mr-2">
+                <button
+                  onClick={() => setSelectedItemIds([])}
+                  className="p-2 text-slate-500 hover:bg-slate-200 rounded-full mr-2 transition-colors"
+                  title="Clear selection"
+                >
                   <X size={20} />
                 </button>
-                <span className="font-medium text-slate-900">{selectedItemIds.length} selected</span>
+                <span className="font-medium text-slate-900 tabular-nums">{selectedItemIds.length} selected</span>
               </div>
               
-              <div className="flex items-center space-x-2">
-                {!isBulkMode ? (
-                  <button 
-                    onClick={() => setExplicitBulkMode(true)}
-                    className="px-4 py-1.5 bg-slate-200 text-slate-800 hover:bg-slate-300 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    Activate Bulk Mode
-                  </button>
-                ) : (
-                  <>
-                    <button onClick={handleCopyItems} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Copy">
-                      <Copy size={20} />
-                    </button>
-                    <button onClick={handleCut} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Cut">
-                      <Scissors size={20} />
-                    </button>
-                    <button onClick={handleBulkStar} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Star">
-                      <Star size={20} />
-                    </button>
-                    <button onClick={handleBulkDelete} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Delete">
-                      <Trash2 size={20} />
-                    </button>
-                    <button onClick={() => setIsUnityModalOpen(true)} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full" title="Unity in new folder">
-                      <FolderInput size={20} />
-                    </button>
-                  </>
-                )}
+              <div className="flex items-center space-x-1 sm:space-x-2">
+                <button onClick={handleCopyItems} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full transition-colors" title="Copy">
+                  <Copy size={20} />
+                </button>
+                <button onClick={handleCut} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full transition-colors" title="Cut">
+                  <Scissors size={20} />
+                </button>
+                <button onClick={handleBulkStar} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full transition-colors" title="Star">
+                  <Star size={20} />
+                </button>
+                <button onClick={handleBulkDelete} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full transition-colors" title="Delete">
+                  <Trash2 size={20} />
+                </button>
+                <button onClick={() => setIsUnityModalOpen(true)} className="p-2 text-slate-600 hover:bg-slate-200 rounded-full transition-colors" title="Unity in new folder">
+                  <FolderInput size={20} />
+                </button>
               </div>
             </header>
           ) : (
@@ -2439,9 +2658,8 @@ export default function App() {
           <div 
             className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar"
             onClick={() => {
-              if (selectedItemIds.length > 0 || explicitBulkMode) {
+              if (selectedItemIds.length > 0) {
                 setSelectedItemIds([]);
-                setExplicitBulkMode(false);
               }
             }}
           >
@@ -2464,15 +2682,17 @@ export default function App() {
                         <FolderCard 
                           key={folder.id}
                           folder={folder}
-                          onDoubleClick={() => {
+                          onOpen={() => {
                             handleOpenFolder(folder.id);
                             setSearchQuery('');
                           }}
-                          onClick={(e) => toggleItemSelection(folder.id, e)}
+                          onToggleSelect={() => toggleItemSelection(folder.id)}
+                          onLongPressSelect={() => selectItemOnHold(folder.id)}
                           onUpdate={(updatedFolder) => handleUpdateFolder(updatedFolder)}
                           onDeleteRequest={(f) => setFolderToDelete(f)}
                           onShareRequest={(f) => { setFolderToShare(f); setIsShareModalOpen(true); }}
                           isSelected={selectedItemIds.includes(folder.id)}
+                          isSelectionMode={isSelectionMode}
                           user={user}
                         />
                       ))}
@@ -2483,7 +2703,7 @@ export default function App() {
                 {searchResults.links.length > 0 && (
                   <div>
                     <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Items</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-stretch">
                       {sortItems(searchResults.links).map(item => (
                         <LinkCard 
                           key={item.link.id} 
@@ -2491,7 +2711,9 @@ export default function App() {
                           onUpdate={handleUpdateLink}
                           onDelete={handleDeleteLink}
                           isSelected={selectedItemIds.includes(item.link.id)}
-                          onClick={(e) => toggleItemSelection(item.link.id, e)}
+                          isSelectionMode={isSelectionMode}
+                          onToggleSelect={() => toggleItemSelection(item.link.id)}
+                          onLongPressSelect={() => selectItemOnHold(item.link.id)}
                           onOpenNote={setViewNoteItem}
                           onOpen={(link) => handleOpenLink(link, item.parentFolderId)}
                         />
@@ -2533,12 +2755,14 @@ export default function App() {
                         <FolderCard 
                           key={folder.id}
                           folder={folder}
-                          onDoubleClick={() => handleOpenFolder(folder.id)}
-                          onClick={(e) => toggleItemSelection(folder.id, e)}
+                          onOpen={() => handleOpenFolder(folder.id)}
+                          onToggleSelect={() => toggleItemSelection(folder.id)}
+                          onLongPressSelect={() => selectItemOnHold(folder.id)}
                           onUpdate={(updatedFolder) => handleUpdateFolder(updatedFolder)}
                           onDeleteRequest={(f) => setFolderToDelete(f)}
                           onShareRequest={(f) => { setFolderToShare(f); setIsShareModalOpen(true); }}
                           isSelected={selectedItemIds.includes(folder.id)}
+                          isSelectionMode={isSelectionMode}
                           user={user}
                         />
                       ))}
@@ -2553,7 +2777,7 @@ export default function App() {
                       <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Items</h2>
                       {currentFolder.folders.length === 0 && currentFolderId === 'root' && sortDropdown}
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-stretch">
                       {sortItems(currentFolder.links).map(link => (
                         <LinkCard 
                           key={link.id} 
@@ -2561,7 +2785,9 @@ export default function App() {
                           onUpdate={handleUpdateLink}
                           onDelete={handleDeleteLink}
                           isSelected={selectedItemIds.includes(link.id)}
-                          onClick={(e) => toggleItemSelection(link.id, e)}
+                          isSelectionMode={isSelectionMode}
+                          onToggleSelect={() => toggleItemSelection(link.id)}
+                          onLongPressSelect={() => selectItemOnHold(link.id)}
                           onOpenNote={setViewNoteItem}
                           onOpen={(link) => handleOpenLink(link, currentFolderId)}
                         />

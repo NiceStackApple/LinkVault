@@ -36,7 +36,7 @@ export const flattenTree = (root: Folder, parentId: string | null = null): { fol
       id: root.id,
       name: root.name,
       parentId: parentId || 'root',
-      createdAt: root.createdAt !== undefined ? root.createdAt : Date.now(),
+      createdAt: root.createdAt !== undefined ? root.createdAt : 0,
       color: root.color || null,
       isPublic: root.isPublic || false,
       shareId: root.shareId || null,
@@ -55,7 +55,7 @@ export const flattenTree = (root: Folder, parentId: string | null = null): { fol
       url: link.url || '',
       content: link.content || '',
       folderId: root.id,
-      createdAt: link.dateAdded,
+      createdAt: link.dateAdded !== undefined ? link.dateAdded : 0,
       starred: link.starred || false,
       previewImage: link.previewImage || null
     });
@@ -68,6 +68,60 @@ export const flattenTree = (root: Folder, parentId: string | null = null): { fol
   }
 
   return { folders, items };
+};
+
+const serializeFolderRecord = (f: any): string =>
+  JSON.stringify({
+    id: String(f.id ?? ''),
+    name: String(f.name ?? ''),
+    parentId: String(f.parentId || 'root'),
+    createdAt: Number(f.createdAt ?? f.dateAdded ?? 0),
+    color: f.color || null,
+    isPublic: Boolean(f.isPublic),
+    shareId: f.shareId || null,
+    starred: Boolean(f.starred),
+    type: f.type || null,
+    shortcutShareId: f.shortcutShareId || null,
+    shortcutOwnerName: f.shortcutOwnerName || null
+  });
+
+const serializeItemRecord = (item: any): string =>
+  JSON.stringify({
+    id: String(item.id ?? ''),
+    type: String(item.type ?? 'general'),
+    title: String(item.title ?? ''),
+    url: String(item.url || ''),
+    content: String(item.content || ''),
+    folderId: String(item.folderId || 'root'),
+    createdAt: Number(item.createdAt ?? item.dateAdded ?? 0),
+    starred: Boolean(item.starred),
+    previewImage: item.previewImage || null
+  });
+
+export const serializeVaultForDiff = (root: Folder): string => {
+  const { folders, items } = flattenTree(root);
+  const sortedFolders = folders
+    .map(f => `${f.id}:${serializeFolderRecord(f)}`)
+    .sort();
+  const sortedItems = items
+    .map(i => `${i.id}:${serializeItemRecord(i)}`)
+    .sort();
+  return JSON.stringify({ f: sortedFolders, i: sortedItems });
+};
+
+type SyncSnapshot = {
+  folders: Map<string, string>;
+  items: Map<string, string>;
+};
+
+const lastSyncedSnapshots = new Map<string, SyncSnapshot>();
+
+export const clearSyncSnapshot = (userId?: string) => {
+  if (userId) {
+    lastSyncedSnapshots.delete(userId);
+  } else {
+    lastSyncedSnapshots.clear();
+  }
 };
 
 export const buildTree = (folders: any[], items: any[]): Folder => {
@@ -131,19 +185,38 @@ export const buildTree = (folders: any[], items: any[]): Folder => {
 
 export const syncToFirestore = async (userId: string, rootFolder: Folder) => {
   const { folders, items } = flattenTree(rootFolder);
-  
-  const foldersRef = collection(db, `users/${userId}/folders`);
-  const itemsRef = collection(db, `users/${userId}/items`);
-  
-  const existingFoldersSnapshot = await getDocs(foldersRef);
-  const existingItemsSnapshot = await getDocs(itemsRef);
-  
-  const existingFolderIds = new Set(existingFoldersSnapshot.docs.map(d => d.id));
-  const existingItemIds = new Set(existingItemsSnapshot.docs.map(d => d.id));
-  
+
+  let baseline = lastSyncedSnapshots.get(userId);
+
+  if (!baseline) {
+    const foldersRef = collection(db, `users/${userId}/folders`);
+    const itemsRef = collection(db, `users/${userId}/items`);
+
+    const [existingFoldersSnapshot, existingItemsSnapshot] = await Promise.all([
+      getDocs(foldersRef),
+      getDocs(itemsRef)
+    ]);
+
+    const folderMap = new Map<string, string>();
+    for (const d of existingFoldersSnapshot.docs) {
+      folderMap.set(d.id, serializeFolderRecord({ id: d.id, ...d.data() }));
+    }
+
+    const itemMap = new Map<string, string>();
+    for (const d of existingItemsSnapshot.docs) {
+      itemMap.set(d.id, serializeItemRecord({ id: d.id, ...d.data() }));
+    }
+
+    baseline = { folders: folderMap, items: itemMap };
+    lastSyncedSnapshots.set(userId, baseline);
+  }
+
+  const nextFolderMap = new Map<string, string>();
+  const nextItemMap = new Map<string, string>();
+
   let batch = writeBatch(db);
   let opCount = 0;
-  
+
   const commitBatch = async () => {
     if (opCount > 0) {
       await batch.commit();
@@ -153,42 +226,57 @@ export const syncToFirestore = async (userId: string, rootFolder: Folder) => {
   };
 
   for (const f of folders) {
-    const docRef = doc(db, `users/${userId}/folders/${f.id}`);
-    batch.set(docRef, f);
-    existingFolderIds.delete(f.id);
-    opCount++;
-    if (opCount >= 450) {
-      await commitBatch();
+    const serialized = serializeFolderRecord(f);
+    nextFolderMap.set(f.id, serialized);
+    if (baseline.folders.get(f.id) !== serialized) {
+      const docRef = doc(db, `users/${userId}/folders/${f.id}`);
+      batch.set(docRef, f);
+      opCount++;
+      if (opCount >= 450) {
+        await commitBatch();
+      }
     }
   }
-  
+
   for (const item of items) {
-    const docRef = doc(db, `users/${userId}/items/${item.id}`);
-    batch.set(docRef, item);
-    existingItemIds.delete(item.id);
-    opCount++;
-    if (opCount >= 450) {
-      await commitBatch();
+    const serialized = serializeItemRecord(item);
+    nextItemMap.set(item.id, serialized);
+    if (baseline.items.get(item.id) !== serialized) {
+      const docRef = doc(db, `users/${userId}/items/${item.id}`);
+      batch.set(docRef, item);
+      opCount++;
+      if (opCount >= 450) {
+        await commitBatch();
+      }
     }
   }
-  
-  for (const id of existingFolderIds) {
-    batch.delete(doc(db, `users/${userId}/folders/${id}`));
-    opCount++;
-    if (opCount >= 450) {
-      await commitBatch();
+
+  for (const existingId of baseline.folders.keys()) {
+    if (!nextFolderMap.has(existingId)) {
+      batch.delete(doc(db, `users/${userId}/folders/${existingId}`));
+      opCount++;
+      if (opCount >= 450) {
+        await commitBatch();
+      }
     }
   }
-  
-  for (const id of existingItemIds) {
-    batch.delete(doc(db, `users/${userId}/items/${id}`));
-    opCount++;
-    if (opCount >= 450) {
-      await commitBatch();
+
+  for (const existingId of baseline.items.keys()) {
+    if (!nextItemMap.has(existingId)) {
+      batch.delete(doc(db, `users/${userId}/items/${existingId}`));
+      opCount++;
+      if (opCount >= 450) {
+        await commitBatch();
+      }
     }
   }
-  
+
+  if (opCount === 0) {
+    return;
+  }
+
   await commitBatch();
+  lastSyncedSnapshots.set(userId, { folders: nextFolderMap, items: nextItemMap });
 };
 
 export const fetchFromFirestore = async (userId: string): Promise<Folder> => {
@@ -202,6 +290,17 @@ export const fetchFromFirestore = async (userId: string): Promise<Folder> => {
   
   const folders = foldersSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
   const items = itemsSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Cache baseline snapshot immediately so initial load never triggers redundant writes
+  const folderMap = new Map<string, string>();
+  for (const f of folders) {
+    folderMap.set(f.id, serializeFolderRecord(f));
+  }
+  const itemMap = new Map<string, string>();
+  for (const item of items) {
+    itemMap.set(item.id, serializeItemRecord(item));
+  }
+  lastSyncedSnapshots.set(userId, { folders: folderMap, items: itemMap });
   
   return buildTree(folders, items);
 };

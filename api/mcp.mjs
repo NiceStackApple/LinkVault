@@ -409,17 +409,34 @@ function safeDocId(workspaceId) {
   return String(workspaceId).replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-async function getWorkspaceBundle(workspaceId) {
+function hashVault(vault) {
+  return crypto.createHash('sha256').update(JSON.stringify(vault ?? DEFAULT_VAULT)).digest('hex');
+}
+
+function makeActivityEntry(toolName, summary, status = 'ok') {
+  return {
+    id: generateId('act'),
+    toolName: String(toolName).slice(0, 64),
+    summary: String(summary).slice(0, 240),
+    status,
+    createdAt: Date.now(),
+  };
+}
+
+async function getWorkspaceBundle(workspaceId, options = {}) {
   const sa = getServiceAccount();
   if (sa) {
     const existing = await fsGetJsonDoc(sa, 'mcpWorkspaces', safeDocId(workspaceId));
     if (existing) return existing;
     const initial = {
-      workspace: { vault: structuredClone(DEFAULT_VAULT), version: 1, updatedAt: Date.now() },
+      workspace: { vault: structuredClone(DEFAULT_VAULT), version: 1, updatedAt: 0 },
       tokens: [],
       activity: [],
     };
-    await fsSetJsonDoc(sa, 'mcpWorkspaces', safeDocId(workspaceId), initial);
+    if (options.createIfMissing) {
+      initial.workspace.updatedAt = Date.now();
+      await fsSetJsonDoc(sa, 'mcpWorkspaces', safeDocId(workspaceId), initial);
+    }
     return initial;
   }
 
@@ -427,8 +444,10 @@ async function getWorkspaceBundle(workspaceId) {
   let ws = store.workspaces[workspaceId];
   if (!ws) {
     ws = { vault: structuredClone(DEFAULT_VAULT), version: 1, updatedAt: Date.now() };
-    store.workspaces[workspaceId] = ws;
-    writeTmpStore(store);
+    if (options.createIfMissing) {
+      store.workspaces[workspaceId] = ws;
+      writeTmpStore(store);
+    }
   }
   return {
     workspace: ws,
@@ -457,9 +476,22 @@ async function getWorkspaceBundle(workspaceId) {
 
 async function saveVaultData(workspaceId, vault, options = {}) {
   const now = Date.now();
+  const incomingHash = hashVault(vault);
   const sa = getServiceAccount();
   if (sa) {
-    const bundle = await getWorkspaceBundle(workspaceId);
+    const bundle = options.bundle || (await getWorkspaceBundle(workspaceId));
+    const currentHash = hashVault(bundle.workspace.vault);
+
+    // Never burn a Firestore write or bump version if vault content is identical
+    if (currentHash === incomingHash && bundle.workspace.updatedAt > 0 && !options.activityEntry) {
+      return {
+        version: bundle.workspace.version,
+        updatedAt: bundle.workspace.updatedAt,
+        conflict: false,
+        unchanged: true,
+      };
+    }
+
     if (
       !options.force &&
       typeof options.expectedVersion === 'number' &&
@@ -472,18 +504,30 @@ async function saveVaultData(workspaceId, vault, options = {}) {
         latestVault: bundle.workspace.vault,
       };
     }
-    const nextVersion = bundle.workspace.version + 1;
+    const nextVersion = currentHash === incomingHash && bundle.workspace.updatedAt > 0
+      ? bundle.workspace.version
+      : bundle.workspace.version + 1;
     bundle.workspace = { vault, version: nextVersion, updatedAt: now };
+    if (options.activityEntry) {
+      bundle.activity = [options.activityEntry, ...(bundle.activity || [])].slice(0, 50);
+    }
     await fsSetJsonDoc(sa, 'mcpWorkspaces', safeDocId(workspaceId), bundle);
-    return { version: nextVersion, updatedAt: now, conflict: false };
+    return { version: nextVersion, updatedAt: now, conflict: false, unchanged: false };
   }
 
   const store = readTmpStore();
   const existing = store.workspaces[workspaceId];
   if (!existing) {
     store.workspaces[workspaceId] = { vault, version: 1, updatedAt: now };
+    if (options.activityEntry) {
+      store.activity.unshift({ ...options.activityEntry, workspaceId });
+    }
     writeTmpStore(store);
-    return { version: 1, updatedAt: now, conflict: false };
+    return { version: 1, updatedAt: now, conflict: false, unchanged: false };
+  }
+  const existingHash = hashVault(existing.vault);
+  if (existingHash === incomingHash && !options.activityEntry) {
+    return { version: existing.version, updatedAt: existing.updatedAt, conflict: false, unchanged: true };
   }
   if (
     !options.force &&
@@ -492,10 +536,19 @@ async function saveVaultData(workspaceId, vault, options = {}) {
   ) {
     return { version: existing.version, updatedAt: existing.updatedAt, conflict: true, latestVault: existing.vault };
   }
-  const nextVersion = existing.version + 1;
+  const nextVersion = existingHash === incomingHash ? existing.version : existing.version + 1;
   store.workspaces[workspaceId] = { vault, version: nextVersion, updatedAt: now };
+  if (options.activityEntry) {
+    store.activity.unshift({ ...options.activityEntry, workspaceId });
+    let count = 0;
+    store.activity = store.activity.filter((row) => {
+      if (row.workspaceId !== workspaceId) return true;
+      count++;
+      return count <= 50;
+    });
+  }
   writeTmpStore(store);
-  return { version: nextVersion, updatedAt: now, conflict: false };
+  return { version: nextVersion, updatedAt: now, conflict: false, unchanged: false };
 }
 
 async function createTokenRecord(workspaceId, label) {
@@ -578,8 +631,12 @@ async function verifyMcpApiToken(rawToken) {
       await fsDeleteDoc(sa, 'mcpTokens', candidateHash).catch(() => {});
       return null;
     }
-    activeToken.lastUsedAt = Date.now();
-    await fsSetJsonDoc(sa, 'mcpWorkspaces', safeDocId(row.workspaceId), bundle).catch(() => {});
+    const now = Date.now();
+    // Throttle lastUsedAt persistence to at most once every 15 minutes to avoid burning Firestore writes on every call
+    if (!activeToken.lastUsedAt || now - activeToken.lastUsedAt > 15 * 60 * 1000) {
+      activeToken.lastUsedAt = now;
+      await fsSetJsonDoc(sa, 'mcpWorkspaces', safeDocId(row.workspaceId), bundle).catch(() => {});
+    }
     return { workspaceId: row.workspaceId, tokenId: row.id, label: row.label };
   }
 
@@ -589,8 +646,11 @@ async function verifyMcpApiToken(rawToken) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   });
   if (!row) return null;
-  row.lastUsedAt = Date.now();
-  writeTmpStore(store);
+  const now = Date.now();
+  if (!row.lastUsedAt || now - row.lastUsedAt > 15 * 60 * 1000) {
+    row.lastUsedAt = now;
+    writeTmpStore(store);
+  }
   return { workspaceId: row.workspaceId, tokenId: row.id, label: row.label };
 }
 
@@ -884,8 +944,8 @@ function toolResult(payload, isError = false) {
 }
 
 async function executeTool(workspaceId, name, args) {
-  const { workspace } = await getWorkspaceBundle(workspaceId);
-  const vault = workspace.vault;
+  const bundle = await getWorkspaceBundle(workspaceId);
+  const vault = bundle.workspace.vault;
 
   switch (name) {
     case 'list_folders': {
@@ -893,7 +953,6 @@ async function executeTool(workspaceId, name, args) {
       if (parentId) {
         const parent = findFolderById(vault, parentId);
         if (!parent) {
-          await recordActivity(workspaceId, name, `Folder not found: ${parentId}`, 'error');
           return toolResult({ error: `Folder "${parentId}" not found` }, true);
         }
         const children = parent.folders.map((f) => ({
@@ -904,22 +963,18 @@ async function executeTool(workspaceId, name, args) {
           starred: Boolean(f.starred),
           color: f.color || null,
         }));
-        await recordActivity(workspaceId, name, `Listed ${children.length} subfolders of "${parent.name}"`);
         return toolResult({ parentId: parent.id, parentName: parent.name, folders: children });
       }
       const all = flattenFolders(vault);
-      await recordActivity(workspaceId, name, `Listed ${all.length} folders`);
       return toolResult({ total: all.length, folders: all });
     }
     case 'get_folder': {
       const folderId = typeof args.folderId === 'string' && args.folderId.trim() ? args.folderId.trim() : 'root';
       const folder = findFolderById(vault, folderId);
       if (!folder) {
-        await recordActivity(workspaceId, name, `Folder not found: ${folderId}`, 'error');
         return toolResult({ error: `Folder "${folderId}" not found` }, true);
       }
       const pathParts = getFolderPath(vault, folder.id) || [folder.name];
-      await recordActivity(workspaceId, name, `Read folder "${folder.name}" (${folder.links.length} items)`);
       return toolResult({
         id: folder.id,
         name: folder.name,
@@ -943,11 +998,6 @@ async function executeTool(workspaceId, name, args) {
       const validTypes = ['youtube', 'tiktok', 'instagram', 'general', 'note'];
       const typeFilter = typeof args.type === 'string' && validTypes.includes(args.type) ? args.type : undefined;
       const results = searchVaultTree(vault, queryStr, typeFilter);
-      await recordActivity(
-        workspaceId,
-        name,
-        `Searched "${queryStr}" -> ${results.folders.length} folders, ${results.items.length} items`
-      );
       return toolResult({
         query: queryStr,
         typeFilter: typeFilter || null,
@@ -957,11 +1007,6 @@ async function executeTool(workspaceId, name, args) {
     }
     case 'list_starred': {
       const starred = collectStarred(vault);
-      await recordActivity(
-        workspaceId,
-        name,
-        `Listed ${starred.folders.length} starred folders, ${starred.items.length} starred items`
-      );
       return toolResult(starred);
     }
     case 'create_folder': {
@@ -971,7 +1016,6 @@ async function executeTool(workspaceId, name, args) {
         typeof args.parentFolderId === 'string' && args.parentFolderId.trim() ? args.parentFolderId.trim() : 'root';
       const parent = findFolderById(vault, parentId);
       if (!parent) {
-        await recordActivity(workspaceId, name, `Parent folder not found: ${parentId}`, 'error');
         return toolResult({ error: `Parent folder "${parentId}" not found` }, true);
       }
       const color =
@@ -985,8 +1029,11 @@ async function executeTool(workspaceId, name, args) {
         ...(color ? { color } : {}),
       };
       parent.folders.push(newFolder);
-      const saved = await saveVaultData(workspaceId, vault, { force: true });
-      await recordActivity(workspaceId, name, `Created folder "${folderName}" in "${parent.name}"`);
+      const saved = await saveVaultData(workspaceId, vault, {
+        force: true,
+        bundle,
+        activityEntry: makeActivityEntry(name, `Created folder "${folderName}" in "${parent.name}"`),
+      });
       return toolResult({ created: true, folder: newFolder, parentId: parent.id, vaultVersion: saved.version });
     }
     case 'add_link': {
@@ -1002,7 +1049,6 @@ async function executeTool(workspaceId, name, args) {
       const folderId = typeof args.folderId === 'string' && args.folderId.trim() ? args.folderId.trim() : 'root';
       const target = findFolderById(vault, folderId);
       if (!target) {
-        await recordActivity(workspaceId, name, `Target folder not found: ${folderId}`, 'error');
         return toolResult({ error: `Folder "${folderId}" not found` }, true);
       }
       const linkType = detectLinkType(safeUrl);
@@ -1016,8 +1062,11 @@ async function executeTool(workspaceId, name, args) {
         previewImage: linkType === 'youtube' ? extractYoutubeThumbnail(safeUrl) : null,
       };
       target.links.push(newLink);
-      const saved = await saveVaultData(workspaceId, vault, { force: true });
-      await recordActivity(workspaceId, name, `Added link "${title}" to "${target.name}"`);
+      const saved = await saveVaultData(workspaceId, vault, {
+        force: true,
+        bundle,
+        activityEntry: makeActivityEntry(name, `Added link "${title}" to "${target.name}"`),
+      });
       return toolResult({ created: true, item: newLink, folderId: target.id, vaultVersion: saved.version });
     }
     case 'add_note': {
@@ -1027,7 +1076,6 @@ async function executeTool(workspaceId, name, args) {
       const folderId = typeof args.folderId === 'string' && args.folderId.trim() ? args.folderId.trim() : 'root';
       const target = findFolderById(vault, folderId);
       if (!target) {
-        await recordActivity(workspaceId, name, `Target folder not found: ${folderId}`, 'error');
         return toolResult({ error: `Folder "${folderId}" not found` }, true);
       }
       const newNote = {
@@ -1040,8 +1088,11 @@ async function executeTool(workspaceId, name, args) {
         starred: Boolean(args.starred),
       };
       target.links.push(newNote);
-      const saved = await saveVaultData(workspaceId, vault, { force: true });
-      await recordActivity(workspaceId, name, `Added note "${title}" to "${target.name}"`);
+      const saved = await saveVaultData(workspaceId, vault, {
+        force: true,
+        bundle,
+        activityEntry: makeActivityEntry(name, `Added note "${title}" to "${target.name}"`),
+      });
       return toolResult({ created: true, item: newNote, folderId: target.id, vaultVersion: saved.version });
     }
     case 'update_item': {
@@ -1063,11 +1114,13 @@ async function executeTool(workspaceId, name, args) {
       if (typeof args.starred === 'boolean') patch.starred = args.starred;
       const { tree, updated } = updateItemInTree(vault, itemId, patch);
       if (!updated) {
-        await recordActivity(workspaceId, name, `Item not found: ${itemId}`, 'error');
         return toolResult({ error: `Item "${itemId}" not found` }, true);
       }
-      const saved = await saveVaultData(workspaceId, tree, { force: true });
-      await recordActivity(workspaceId, name, `Updated item "${updated.title}"`);
+      const saved = await saveVaultData(workspaceId, tree, {
+        force: true,
+        bundle,
+        activityEntry: makeActivityEntry(name, `Updated item "${updated.title}"`),
+      });
       return toolResult({ updated: true, item: updated, vaultVersion: saved.version });
     }
     case 'delete_item': {
@@ -1075,11 +1128,13 @@ async function executeTool(workspaceId, name, args) {
       if (!itemId) return toolResult({ error: 'itemId is required' }, true);
       const { tree, deleted } = deleteItemFromTree(vault, itemId);
       if (!deleted) {
-        await recordActivity(workspaceId, name, `Item not found: ${itemId}`, 'error');
         return toolResult({ error: `Item "${itemId}" not found` }, true);
       }
-      const saved = await saveVaultData(workspaceId, tree, { force: true });
-      await recordActivity(workspaceId, name, `Deleted item ${itemId}`);
+      const saved = await saveVaultData(workspaceId, tree, {
+        force: true,
+        bundle,
+        activityEntry: makeActivityEntry(name, `Deleted item ${itemId}`),
+      });
       return toolResult({ deleted: true, itemId, vaultVersion: saved.version });
     }
     case 'delete_folder': {
@@ -1087,11 +1142,13 @@ async function executeTool(workspaceId, name, args) {
       if (!folderId || folderId === 'root') return toolResult({ error: 'A non-root folderId is required' }, true);
       const { tree, deleted } = deleteFolderFromTree(vault, folderId);
       if (!deleted) {
-        await recordActivity(workspaceId, name, `Folder not found: ${folderId}`, 'error');
         return toolResult({ error: `Folder "${folderId}" not found` }, true);
       }
-      const saved = await saveVaultData(workspaceId, tree, { force: true });
-      await recordActivity(workspaceId, name, `Deleted folder ${folderId}`);
+      const saved = await saveVaultData(workspaceId, tree, {
+        force: true,
+        bundle,
+        activityEntry: makeActivityEntry(name, `Deleted folder ${folderId}`),
+      });
       return toolResult({ deleted: true, folderId, vaultVersion: saved.version });
     }
     default:
@@ -1154,7 +1211,6 @@ async function handleMcpMessage(workspaceId, msg) {
       const uri = typeof params.uri === 'string' ? params.uri : '';
       const { workspace } = await getWorkspaceBundle(workspaceId);
       if (uri === 'linkvault://tree') {
-        await recordActivity(workspaceId, 'resources/read', 'Read resource linkvault://tree');
         return {
           jsonrpc: '2.0',
           id,
@@ -1174,7 +1230,6 @@ async function handleMcpMessage(workspaceId, msg) {
         };
       }
       if (uri === 'linkvault://starred') {
-        await recordActivity(workspaceId, 'resources/read', 'Read resource linkvault://starred');
         return {
           jsonrpc: '2.0',
           id,
@@ -1187,7 +1242,6 @@ async function handleMcpMessage(workspaceId, msg) {
       }
       if (uri === 'linkvault://summary') {
         const folders = flattenFolders(workspace.vault);
-        await recordActivity(workspaceId, 'resources/read', 'Read resource linkvault://summary');
         return {
           jsonrpc: '2.0',
           id,
